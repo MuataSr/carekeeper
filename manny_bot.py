@@ -35,6 +35,7 @@ WELCOME = (
     "only change things with your OK.\n\n"
     "Here's what I can do:\n"
     "/status - how are my computers doing right now\n"
+    "/dashboard - the family fleet at a glance (picture)\n"
     "/propose - propose a safe fix (you approve before I touch anything)\n"
     "/recent - what I've done lately (the logbook)\n"
     "/help - this message"
@@ -45,6 +46,7 @@ HELP = (
     "and fix the small stuff *with your permission*.\n\n"
     "Commands:\n"
     "/status - plain-language health report right now\n"
+    "/dashboard - the family fleet at a glance (picture)\n"
     "/propose - list a safe fix for approval\n"
     "/recent - the last things I did (the logbook)\n"
     "/help - this message\n\n"
@@ -89,6 +91,35 @@ class TelegramBot:
                        {"callback_query_id": cb_id, "text": text})
         except Exception:
             pass
+
+    def send_photo(self, chat_id, photo_path: str, caption: str = ""):
+        """Send a photo file as multipart/form-data (urllib, no deps)."""
+        import uuid
+
+        boundary = "----CK" + uuid.uuid4().hex
+        with open(photo_path, "rb") as f:
+            file_bytes = f.read()
+        filename = os.path.basename(photo_path)
+        parts = []
+        parts.append(f"--{boundary}\r\n"
+                     f'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
+                     f"{chat_id}\r\n")
+        parts.append(f"--{boundary}\r\n"
+                     f'Content-Disposition: form-data; name="caption"\r\n\r\n'
+                     f"{caption}\r\n")
+        parts.append(f"--{boundary}\r\n"
+                     f'Content-Disposition: form-data; name="photo"; '
+                     f'filename="{filename}"\r\n'
+                     f"Content-Type: image/png\r\n\r\n")
+        body = ("".join(parts)).encode() + file_bytes + \
+            f"\r\n--{boundary}--\r\n".encode()
+        url = API.format(token=self.token, method="sendPhoto")
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type":
+                     f"multipart/form-data; boundary={boundary}"})
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            return json.loads(resp.read().decode())
 
 
 def approval_keyboard(action: str, token: str) -> dict:
@@ -140,6 +171,17 @@ def handle_message(bot: TelegramBot, cfg: dict, msg: dict):
                      parse_mode="Markdown")
         else:
             bot.send(chat_id, res.get("error", "Couldn't propose that fix."))
+    elif cmd == "/dashboard":
+        try:
+            sys.path.insert(0, BASE)
+            from dashboard import render
+            from fleet_check import collect_all
+            machines = collect_all(cfg)
+            path = render(machines, os.path.join(BASE, "state", "dashboard.png"))
+            bot.send_photo(chat_id, path,
+                           "Your family fleet at a glance - Manny")
+        except Exception as exc:
+            bot.send(chat_id, f"I hit a snag rendering the dashboard: {exc}")
     elif cmd == "/recent":
         audit = get_audit(cfg["audit"]["db"])
         lines = []
