@@ -74,10 +74,16 @@ def _template_report(tele) -> str:
     smart = tele["smart"]["devices"]
     if smart:
         bad = [s for s in smart if s["health"] == "FAIL"]
+        unknown = [s for s in smart if s["health"] == "unknown"]
         if bad:
             lines.append("The drive health check shows a problem on "
                          + ", ".join(s["dev"] for s in bad)
                          + ". Back up important files as soon as possible.")
+        elif unknown:
+            lines.append("Manny could not check the drive health on "
+                         + ", ".join(s["dev"] for s in unknown)
+                         + " - not a problem found, just a check that "
+                           "couldn't run.")
         else:
             lines.append("Drive health checks passed - the drives are in good shape.")
     backups = tele["backups"]["results"]

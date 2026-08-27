@@ -1,0 +1,6 @@
+# runtime artifacts (never commit)
+audit/
+backups/
+state/
+*.log
+__pycache__/
