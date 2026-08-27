@@ -34,7 +34,7 @@ You talk to a family, not to technicians. Rules:
 3. Say "storage" for disk space, "restart" for reboot, "security update" for patch, "check for bad stuff" for malware scans, "drive health" for SMART.
 4. Never name drives by technical labels like sda or sdb - say "your main drive", "your second drive", or "the drives".
 5. If a check could not run (drive health unknown), say the check could not run - do NOT claim the drives are fine or that there are no signs of trouble. Honesty over reassurance.
-6. Never show file paths or technical addresses - say "your backup folder" or "the place where backups are stored".
+6. Never mention load numbers, temperatures, or how long a computer has been running - those are technician details. Say "running smoothly" or "working hard" instead.
 7. If something needs attention, say what a family member should know and what Manny recommends - always with their permission before anything is changed.
 8. Keep it to 6-8 short sentences, friendly but professional. Never invent facts that are not in the telemetry provided."""
 
@@ -121,6 +121,64 @@ def _template_report(tele) -> str:
 def check_dictionary(report: str) -> list:
     """Return any banned terms that leaked into the report."""
     return sorted(set(m.group(0).lower() for m in _BANNED_RE.finditer(report)))
+
+
+FLEET_PROMPT = """You are Manny, the friendly computer caretaker for the CareKeeper service. \
+You look after a family's computers and report on ALL of them in one message. Rules:
+1. Explain the health of every computer in plain, warm language. No jargon.
+2. Never use these words or ideas: partition, patch, reboot, malware, virus, daemon, package, RAM, CPU, GPU, SSD, uptime, SMART, temperature readings, telemetry, metric, mount, reallocated.
+3. Say "storage" for disk space, "restart" for reboot, "security update" for patch, "drive health" for SMART.
+4. Never name drives by technical labels (sda, sdb...) or show file paths - say "your main drive", "your backup folder".
+5. If a check could not run (drive health unknown, or a computer could not be reached), say so honestly - do NOT claim things are fine.
+6. Never mention load numbers, temperatures, or how long a computer has been running - those are technician details. Say "running smoothly" or "working hard" instead.
+7. Never name drives by technical labels (sda, sdb...) or show file paths - say "your main drive", "your backup folder".
+8. If a check could not run (drive health unknown, or a computer could not be reached), say so honestly - do NOT claim things are fine.
+9. Start with one friendly opening line, then one short line per computer (name it the way a family would: "M7", "the main machine", "the Dell"), then one closing line with any recommendation. Never invent facts not in the telemetry.
+10. Keep it to 8-12 short sentences total."""
+
+
+def fleet_report(cfg, machines: dict):
+    """One plain-language report for the whole fleet.
+
+    machines: {device_id: telemetry_dict or {"error": "..."}}
+    Returns (report, violations).
+    """
+    payload = {"machines": machines}
+    try:
+        url = cfg["brain"]["url"] + "/chat/completions"
+        req = urllib.request.Request(
+            url, data=json.dumps({
+                "model": cfg["brain"].get("model", "granite-4.1-3b-q4"),
+                "messages": [
+                    {"role": "system", "content": FLEET_PROMPT},
+                    {"role": "user", "content":
+                     "Here is the fleet health telemetry as JSON. Write the "
+                     "family status report:\n" + json.dumps(payload)},
+                ],
+                "temperature": 0.4,
+                "max_tokens": 350,
+            }).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req,
+                                    timeout=cfg["brain"]["timeout_s"]) as resp:
+            data = json.loads(resp.read().decode())
+        report = data["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        lines = ["Hi! Here's how your family's computers are doing:"]
+        for dev, tele in machines.items():
+            if isinstance(tele, dict) and "error" in tele:
+                lines.append(f"- {dev}: could not be reached right now.")
+            elif isinstance(tele, dict):
+                head = tele.get("disk", {}).get("worst_pct")
+                lines.append(f"- {dev}: storage "
+                             + (f"{head}% full." if head is not None
+                                else "could not be checked."))
+            else:
+                lines.append(f"- {dev}: could not be reached right now.")
+        lines.append("(brain was offline - this used the backup template: "
+                     f"{exc})")
+        report = "\n".join(lines)
+    return report, check_dictionary(report)
 
 
 def make_report(cfg, telemetry: dict):
