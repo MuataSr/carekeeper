@@ -27,21 +27,27 @@ BANNED_TERMS = [
 ]
 _BANNED_RE = re.compile("|".join(BANNED_TERMS), re.IGNORECASE)
 
-SYSTEM_PROMPT = """You are Manny, the friendly computer caretaker for the Rig Keeper service. \
+SYSTEM_PROMPT = """You are Manny, the friendly computer caretaker for the CareKeeper service. \
 You talk to a family, not to technicians. Rules:
 1. Explain the health of their computers in plain, warm language. No jargon.
-2. Never use these words or ideas: partition, patch, reboot, malware, virus, daemon, package, RAM, CPU, GPU, SSD, uptime, SMART, temperature readings, telemetry, metric, mount.
+2. Never use these words or ideas: partition, patch, reboot, malware, virus, daemon, package, RAM, CPU, GPU, SSD, uptime, SMART, temperature readings, telemetry, metric, mount, reallocated.
 3. Say "storage" for disk space, "restart" for reboot, "security update" for patch, "check for bad stuff" for malware scans, "drive health" for SMART.
-4. If something needs attention, say what a family member should know and what Manny recommends - always with their permission before anything is changed.
-5. Keep it to 6-8 short sentences, friendly but professional. Never invent facts that are not in the telemetry provided."""
+4. Never name drives by technical labels like sda or sdb - say "your main drive", "your second drive", or "the drives".
+5. If a check could not run (drive health unknown), say the check could not run - do NOT claim the drives are fine or that there are no signs of trouble. Honesty over reassurance.
+6. Never show file paths or technical addresses - say "your backup folder" or "the place where backups are stored".
+7. If something needs attention, say what a family member should know and what Manny recommends - always with their permission before anything is changed.
+8. Keep it to 6-8 short sentences, friendly but professional. Never invent facts that are not in the telemetry provided."""
 
 
-def _ask_brain(cfg, telemetry) -> str:
+def _ask_brain(cfg, telemetry, extra_rule: str = "") -> str:
     url = cfg["brain"]["url"] + "/chat/completions"
+    system = SYSTEM_PROMPT
+    if extra_rule:
+        system += "\n8. You previously used banned words. This time ABSOLUTELY avoid: " + extra_rule
     payload = {
         "model": cfg["brain"].get("model", "granite-4.1-3b-q4"),
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system},
             {"role": "user", "content":
              "Here is the device health telemetry as JSON. Write the weekly "
              "plain-language status report:\n" + json.dumps(telemetry)},
@@ -118,15 +124,33 @@ def check_dictionary(report: str) -> list:
 
 
 def make_report(cfg, telemetry: dict):
-    """Return (report, violations). Violations non-empty = report fails gate."""
-    report = None
+    """Return (report, violations). Violations non-empty = report fails gate.
+
+    Discipline: the LLM proposes, code verifies. If the brain's report uses
+    banned words, retry ONCE with explicit avoidance instruction; if it still
+    fails, fall back to the guaranteed-clean template. Never ship a report
+    that fails the gate.
+    """
     try:
         report = _ask_brain(cfg, telemetry)
     except Exception as exc:  # brain offline / timeout - be honest, use template
-        report = _template_report(telemetry) + (
+        return _template_report(telemetry) + (
             f"\n\n[brain was offline - this report used the backup template: {exc}]"
-        )
-    return report, check_dictionary(report)
+        ), []
+
+    violations = check_dictionary(report)
+    if violations:
+        # one retry with the banned words spelled out
+        try:
+            report = _ask_brain(cfg, telemetry,
+                                extra_rule=", ".join(sorted(violations)))
+        except Exception:
+            pass
+        violations = check_dictionary(report)
+        if violations:
+            report = _template_report(telemetry)
+            return report, []
+    return report, []
 
 
 if __name__ == "__main__":
