@@ -47,7 +47,7 @@ def _ask_brain(cfg, telemetry) -> str:
              "plain-language status report:\n" + json.dumps(telemetry)},
         ],
         "temperature": 0.4,
-        "max_tokens": 400,
+        "max_tokens": 250,
     }
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode(),
