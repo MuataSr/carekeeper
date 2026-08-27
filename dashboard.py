@@ -20,6 +20,8 @@ from PIL import Image, ImageDraw, ImageFont
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
+DASH_PATH = os.path.join(BASE, "state", "dashboard.png")
+
 from care_agent import load_config
 from fleet_check import collect_all
 
@@ -70,7 +72,8 @@ def status_of(tele: dict) -> tuple[str, tuple]:
     return "healthy", OK
 
 
-def render(machines: dict, out_path: str) -> str:
+def render(machines: dict, cfg: dict = None, out_path: str = None) -> str:
+    out_path = out_path or DASH_PATH
     W = 900
     H = 130 + 130 * len(machines) + 60
     img = Image.new("RGB", (W, H), BG)

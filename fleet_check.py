@@ -134,10 +134,8 @@ def main():
                       {"disk_pct": tele.get("disk", {}).get("worst_pct"),
                        "patches": tele.get("patches", {}).get("pending")})
 
-    # brain report (gate-checked; falls back to clean template)
+    # brain report (gate-checked internally: retry once, then clean template)
     report, violations = fleet_report(cfg, machines)
-    if violations:
-        report, violations = fleet_report(cfg, machines)  # one retry path
     print(report)
     print(f"[dictionary check: {'PASS' if not violations else 'FAIL'}]")
 
@@ -156,6 +154,20 @@ def main():
         audit.log(cfg["device_id"], "report", "telegram.fleet", "write", True,
                   "fleet report delivered via Manny")
         print("[delivered via Manny]")
+        # attach the dashboard picture right after the text report
+        try:
+            from dashboard import render, DASH_PATH
+            png = render(machines, cfg)
+            bot.send_photo(cfg["telegram"]["chat_id"], png,
+                           caption="Family fleet at a glance")
+            audit.log(cfg["device_id"], "report", "telegram.dashboard",
+                      "write", True, "dashboard picture delivered",
+                      {"bytes": os.path.getsize(png)})
+            print("[dashboard picture delivered]")
+        except Exception as exc:
+            audit.log(cfg["device_id"], "report", "telegram.dashboard",
+                      "write", False, f"dashboard delivery failed: {exc}")
+            print(f"[dashboard picture failed: {exc}]")
     except Exception as exc:
         audit.log(cfg["device_id"], "report", "telegram.fleet", "write",
                   False, f"delivery failed: {exc}")

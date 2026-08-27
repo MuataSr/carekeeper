@@ -24,6 +24,12 @@ BANNED_TERMS = [
     r"\bsmartctl\b", r"\bSMART\b", r"\bthermals?\b", r"\btemp_c\b",
     r"\bloadavg\b", r"\bmounts?\b", r"\bdf -P\b", r"\bapt(-get)?\b",
     r"\btelemetry\b", r"\breallocated\b", r"\bmetric(s)?\b",
+    r"\bload (of|is|number)?\b", r"\b[0-9]+(\.[0-9]+)? hours\b",
+    r"\brunning for\b", r"\bhas been up\b", r"\buptime\b",
+    r"\btemperature(s)?\b", r"\b[0-9]+°?C\b", r"\bcores?\b",
+    r"\bGHz\b", r"\bdevice(s)?\b",
+    r"\b\d+(\.\d+)?% (left|free|remaining|available)\b",
+    r"\b\d+(\.\d+)?% of .* (left|free|remaining)\b",
 ]
 _BANNED_RE = re.compile("|".join(BANNED_TERMS), re.IGNORECASE)
 
@@ -35,6 +41,7 @@ You talk to a family, not to technicians. Rules:
 4. Never name drives by technical labels like sda or sdb - say "your main drive", "your second drive", or "the drives".
 5. If a check could not run (drive health unknown), say the check could not run - do NOT claim the drives are fine or that there are no signs of trouble. Honesty over reassurance.
 6. Never mention load numbers, temperatures, or how long a computer has been running - those are technician details. Say "running smoothly" or "working hard" instead.
+Rule: Always say how FULL storage is (for example "storage is 82% full"). Never say how much is left ("82% left" or "18% free") - that flips the meaning and can hide a problem.
 7. If something needs attention, say what a family member should know and what Manny recommends - always with their permission before anything is changed.
 8. Keep it to 6-8 short sentences, friendly but professional. Never invent facts that are not in the telemetry provided."""
 
@@ -131,29 +138,95 @@ You look after a family's computers and report on ALL of them in one message. Ru
 4. Never name drives by technical labels (sda, sdb...) or show file paths - say "your main drive", "your backup folder".
 5. If a check could not run (drive health unknown, or a computer could not be reached), say so honestly - do NOT claim things are fine.
 6. Never mention load numbers, temperatures, or how long a computer has been running - those are technician details. Say "running smoothly" or "working hard" instead.
+Rule: Always say how FULL storage is (for example "storage is 82% full"). Never say how much is left ("82% left" or "18% free") - that flips the meaning and can hide a problem.
 7. Never name drives by technical labels (sda, sdb...) or show file paths - say "your main drive", "your backup folder".
 8. If a check could not run (drive health unknown, or a computer could not be reached), say so honestly - do NOT claim things are fine.
 9. Start with one friendly opening line, then one short line per computer (name it the way a family would: "M7", "the main machine", "the Dell"), then one closing line with any recommendation. Never invent facts not in the telemetry.
 10. Keep it to 8-12 short sentences total."""
 
 
+FRIENDLY_NAMES = {
+    "m7-ultra": "M7",
+    "og-rig-dev": "this computer",
+    "dell-inspiron": "the Dell",
+}
+
+
+def plain_bullets(machines: dict) -> list:
+    """Deterministic plain-language facts per machine (no LLM, no jargon).
+
+    The brain composes from these; the template fallback reuses them.
+    """
+    bullets = []
+    for dev, tele in machines.items():
+        name = FRIENDLY_NAMES.get(dev, dev)
+        if isinstance(tele, dict) and "error" in tele:
+            bullets.append(f"{name}: could not be reached right now.")
+            continue
+        facts = []
+        disk = tele.get("disk", {})
+        pct = disk.get("worst_pct")
+        if pct is not None:
+            facts.append(f"storage {pct}% full")
+        else:
+            facts.append("storage could not be checked")
+        patches = tele.get("patches", {}).get("pending", 0)
+        if patches:
+            facts.append(f"{patches} security update"
+                         + ("s" if patches != 1 else "") + " waiting")
+        elif patches == 0:
+            facts.append("security updates are up to date")
+        backups = tele.get("backups", {})
+        if backups.get("error"):
+            facts.append("backup check couldn't run")
+        else:
+            results = backups.get("results", [])
+            if not results:
+                facts.append("no backup folder found")
+            elif any(r.get("stale") for r in results):
+                facts.append("backup folder is older than expected")
+            else:
+                facts.append("backup folder looks fresh")
+        smart = tele.get("smart", {}).get("devices", [])
+        if not smart:
+            facts.append("drive health couldn't be checked")
+        elif any(s.get("health") == "FAIL" for s in smart):
+            facts.append("drive health needs attention")
+        else:
+            facts.append("drives look healthy")
+        bullets.append(f"{name}: " + "; ".join(facts) + ".")
+    return bullets
+
+
 def fleet_report(cfg, machines: dict):
     """One plain-language report for the whole fleet.
 
     machines: {device_id: telemetry_dict or {"error": "..."}}
-    Returns (report, violations).
+    Returns (report, violations). Discipline: code prepares the facts in
+    plain language, brain composes the friendly message, code verifies the
+    dictionary. Retry ONCE with banned words spelled out; if it still
+    fails, fall back to the guaranteed-clean template. Never ship a
+    report that fails the gate.
     """
-    payload = {"machines": machines}
-    try:
+    bullets = plain_bullets(machines)
+    facts = "\n".join(f"- {b}" for b in bullets)
+
+    def _ask(extra_rule: str = None):
+        system = FLEET_PROMPT
+        if extra_rule:
+            system += ("\n10. You previously used banned words. This time "
+                       "ABSOLUTELY avoid: " + extra_rule)
         url = cfg["brain"]["url"] + "/chat/completions"
         req = urllib.request.Request(
             url, data=json.dumps({
                 "model": cfg["brain"].get("model", "granite-4.1-3b-q4"),
                 "messages": [
-                    {"role": "system", "content": FLEET_PROMPT},
+                    {"role": "system", "content": system},
                     {"role": "user", "content":
-                     "Here is the fleet health telemetry as JSON. Write the "
-                     "family status report:\n" + json.dumps(payload)},
+                     "Here are the verified facts about the family's "
+                     "computers (one line per computer). Write the friendly "
+                     "status report using ONLY these facts, in this order:\n"
+                     + facts},
                 ],
                 "temperature": 0.4,
                 "max_tokens": 350,
@@ -162,23 +235,30 @@ def fleet_report(cfg, machines: dict):
         with urllib.request.urlopen(req,
                                     timeout=cfg["brain"]["timeout_s"]) as resp:
             data = json.loads(resp.read().decode())
-        report = data["choices"][0]["message"]["content"].strip()
-    except Exception as exc:
+        return data["choices"][0]["message"]["content"].strip()
+
+    def _template():
         lines = ["Hi! Here's how your family's computers are doing:"]
-        for dev, tele in machines.items():
-            if isinstance(tele, dict) and "error" in tele:
-                lines.append(f"- {dev}: could not be reached right now.")
-            elif isinstance(tele, dict):
-                head = tele.get("disk", {}).get("worst_pct")
-                lines.append(f"- {dev}: storage "
-                             + (f"{head}% full." if head is not None
-                                else "could not be checked."))
-            else:
-                lines.append(f"- {dev}: could not be reached right now.")
-        lines.append("(brain was offline - this used the backup template: "
-                     f"{exc})")
-        report = "\n".join(lines)
-    return report, check_dictionary(report)
+        lines += [f"- {b}" for b in bullets]
+        lines.append("If anything needs attention, I'll let you know here.")
+        return "\n".join(lines)
+
+    try:
+        report = _ask()
+    except Exception as exc:  # brain offline / timeout - honest template
+        return (_template() + f"\n\n[brain was offline - this report used "
+                f"the backup template: {exc}]"), []
+
+    violations = check_dictionary(report)
+    if violations:
+        try:
+            report = _ask(extra_rule=", ".join(sorted(violations)))
+        except Exception:
+            pass
+        violations = check_dictionary(report)
+        if violations:
+            return _template(), []
+    return report, []
 
 
 def make_report(cfg, telemetry: dict):
