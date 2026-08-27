@@ -1,0 +1,17 @@
+[Unit]
+Description=CareKeeper Manny (Telegram interface)
+After=carekeeper-brain.service
+Wants=carekeeper-brain.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/rig-keeper
+ExecStart=/usr/bin/python3 %h/rig-keeper/manny_bot.py --serve
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=carekeeper-manny
+
+[Install]
+WantedBy=default.target

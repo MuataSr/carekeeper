@@ -1,0 +1,16 @@
+[Unit]
+Description=CareKeeper edge brain (Granite 4.1 3B, port 8084)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/rig-keeper
+ExecStart=%h/llama.cpp/build-cpu/bin/llama-server --model %h/.nanobot/models/granite/ibm-granite_granite-4.1-3b-Q4_K_M.gguf --host 127.0.0.1 --port 8084 --ctx-size 4096 --threads 4
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=carekeeper-brain
+
+[Install]
+WantedBy=default.target
