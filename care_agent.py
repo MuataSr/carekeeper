@@ -265,7 +265,8 @@ def telemetry_backups(paths, max_age_hours):
                     pass
         age_h = (now - newest) / 3600 if newest else None
         results.append({
-            "path": p, "present": True, "newest_age_hours": age_h,
+            "path": p, "present": True, "empty": newest == 0,
+            "newest_age_hours": age_h,
             "stale": age_h is not None and age_h > max_age_hours,
         })
     return {"results": results}

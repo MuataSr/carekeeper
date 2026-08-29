@@ -183,6 +183,10 @@ def plain_bullets(machines: dict) -> list:
             results = backups.get("results", [])
             if not results:
                 facts.append("no backup folder found")
+            elif any(r.get("present") is False for r in results):
+                facts.append("a backup folder couldn't be found")
+            elif any(r.get("empty") for r in results):
+                facts.append("a backup folder is empty - nothing backed up yet")
             elif any(r.get("stale") for r in results):
                 facts.append("backup folder is older than expected")
             else:

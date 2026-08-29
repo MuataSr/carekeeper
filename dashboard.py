@@ -88,12 +88,16 @@ def status_of(tele: dict) -> tuple:
     stale = any(b.get("stale") for b in tele.get("backups", {}).get("results", []))
     if stale:
         return "a backup is behind", AMBER
+    bres = tele.get("backups", {}).get("results", [])
+    if any(b.get("present") is False for b in bres):
+        return "a backup folder is missing", AMBER
+    if any(b.get("empty") for b in bres):
+        return "backup folder is empty", AMBER
     pending = tele.get("patches", {}).get("pending", 0)
     if pending and pending > 0:
         n = "update" if pending == 1 else "updates"
         return f"{pending} {n} ready — waiting on your OK", AMBER
-    backups = tele.get("backups", {}).get("results", [])
-    if backups:
+    if bres:
         return "up to date · backed up", GREEN
     return "up to date", GREEN
 
@@ -115,12 +119,16 @@ def row_text(tele: dict) -> tuple:
     stale = any(b.get("stale") for b in tele.get("backups", {}).get("results", []))
     if stale:
         return "a backup is behind", AMBER
+    bres = tele.get("backups", {}).get("results", [])
+    if any(b.get("present") is False for b in bres):
+        return "a backup folder is missing", AMBER
+    if any(b.get("empty") for b in bres):
+        return "backup folder is empty", AMBER
     pending = tele.get("patches", {}).get("pending", 0)
     if pending and pending > 0:
         n = "update" if pending == 1 else "updates"
         return f"{pending} {n} ready — waiting on your OK", AMBER
-    backups = tele.get("backups", {}).get("results", [])
-    if backups:
+    if bres:
         return "up to date · backed up", CREAM_DIM
     return "up to date", CREAM_DIM
 
@@ -353,12 +361,17 @@ def render(machines: dict, cfg: dict = None, out_path: str = None) -> str:
     ]
     checked_devs = [t for t in machines.values()
                     if isinstance(t, dict) and "error" not in t]
-    devs_with_backups = [
-        t for t in checked_devs if t.get("backups", {}).get("results")
-    ]
+    def _real_backup(t):
+        return any(b.get("present") and not b.get("empty")
+                   for b in t.get("backups", {}).get("results", []))
+    devs_with_backups = [t for t in checked_devs if _real_backup(t)]
     if not backup_results:
         safe1 = ("Backups:", " not set up yet")
         safe1_color = GRAY
+    elif any(b.get("empty") for b in backup_results) or \
+            any(b.get("present") is False for b in backup_results):
+        safe1 = ("Backups:", " a folder is empty or missing — Manny will check")
+        safe1_color = AMBER
     elif len(devs_with_backups) < len(checked_devs):
         safe1 = ("Backups:", " not set up on every device")
         safe1_color = AMBER
