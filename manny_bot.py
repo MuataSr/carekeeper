@@ -22,37 +22,43 @@ sys.path.insert(0, BASE)
 
 from care_agent import (load_config, collect_telemetry, propose_fix,
                         execute_fix, get_audit, ACTIONS)
-from brain import make_report, _template_report
+from brain import make_report, _template_report, get_persona
 
 TOKEN_PATH = os.path.join(BASE, "state", "bot_token.txt")
 
 API = "https://api.telegram.org/bot{token}/{method}"
 
-WELCOME = (
-    "Hi! I'm Manny, your CareKeeper. 👋\n\n"
-    "I watch over your computers so you don't have to think about them. "
-    "I check their health, explain what's going on in plain language, and "
-    "only change things with your OK.\n\n"
-    "Here's what I can do:\n"
-    "/status - how are my computers doing right now\n"
-    "/dashboard - the family fleet at a glance (picture)\n"
-    "/propose - propose a safe fix (you approve before I touch anything)\n"
-    "/recent - what I've done lately (the logbook)\n"
-    "/help - this message"
-)
 
-HELP = (
-    "I'm Manny, your CareKeeper. The care IS the product - I watch, warn, "
-    "and fix the small stuff *with your permission*.\n\n"
-    "Commands:\n"
-    "/status - plain-language health report right now\n"
-    "/dashboard - the family fleet at a glance (picture)\n"
-    "/propose - list a safe fix for approval\n"
-    "/recent - the last things I did (the logbook)\n"
-    "/help - this message\n\n"
-    "Rules I live by: I never touch your stuff without a clear yes, I back "
-    "everything up first, and I'm honest when I don't know something."
-)
+def welcome_text(cfg: dict) -> str:
+    p = get_persona(cfg)
+    return (
+        f"Hi! I'm {p['name']}, your CareKeeper. 👋\n\n"
+        "I watch over your computers so you don't have to think about them. "
+        "I check their health, explain what's going on in plain language, and "
+        "only change things with your OK.\n\n"
+        "Here's what I can do:\n"
+        "/status - how are my computers doing right now\n"
+        "/dashboard - the family fleet at a glance (picture)\n"
+        "/propose - propose a safe fix (you approve before I touch anything)\n"
+        "/recent - what I've done lately (the logbook)\n"
+        "/help - this message"
+    )
+
+
+def help_text(cfg: dict) -> str:
+    p = get_persona(cfg)
+    return (
+        f"I'm {p['name']}, your CareKeeper. The care IS the product - I watch, "
+        "warn, and fix the small stuff *with your permission*.\n\n"
+        "Commands:\n"
+        "/status - plain-language health report right now\n"
+        "/dashboard - the family fleet at a glance (picture)\n"
+        "/propose - list a safe fix for approval\n"
+        "/recent - the last things I did (the logbook)\n"
+        "/help - this message\n\n"
+        "Rules I live by: I never touch your stuff without a clear yes, I back "
+        "everything up first, and I'm honest when I don't know something."
+    )
 
 
 class TelegramBot:
@@ -139,7 +145,7 @@ def handle_message(bot: TelegramBot, cfg: dict, msg: dict):
         return
     cmd = text.split()[0].lower() if text else ""
     if cmd in ("/start", "/help"):
-        bot.send(chat_id, HELP, parse_mode="Markdown")
+        bot.send(chat_id, help_text(cfg), parse_mode="Markdown")
     elif cmd == "/status":
         try:
             tele = collect_telemetry(cfg)
@@ -179,7 +185,8 @@ def handle_message(bot: TelegramBot, cfg: dict, msg: dict):
             machines = collect_all(cfg)
             path = render(machines, os.path.join(BASE, "state", "dashboard.png"))
             bot.send_photo(chat_id, path,
-                           "Your family fleet at a glance - Manny")
+                           f"Your family fleet at a glance - "
+                           f"{get_persona(cfg)['name']}")
         except Exception as exc:
             bot.send(chat_id, f"I hit a snag rendering the dashboard: {exc}")
     elif cmd == "/recent":
@@ -192,10 +199,10 @@ def handle_message(bot: TelegramBot, cfg: dict, msg: dict):
         bot.send(chat_id, "The logbook (last 8):\n" + "\n".join(lines)
                  if lines else "The logbook is empty.")
     else:
+        p = get_persona(cfg)
         bot.send(chat_id,
-                 "I'm Manny, your CareKeeper - I keep your computers healthy, "
-                 "I don't chat for sport. Try /status to see how things are "
-                 "looking, or /help.")
+                 f"{p['reframe']} Try /status to see how things are looking, "
+                 "or /help.")
 
 
 def handle_callback(bot: TelegramBot, cfg: dict, cb: dict):

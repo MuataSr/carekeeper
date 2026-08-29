@@ -1,0 +1,9 @@
+[Unit]
+Description=CareKeeper weekly fleet review
+
+[Timer]
+OnCalendar=Sun 08:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

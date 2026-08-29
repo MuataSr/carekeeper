@@ -29,12 +29,85 @@ BANNED_TERMS = [
     r"\btemperature(s)?\b", r"\b[0-9]+°?C\b", r"\bcores?\b",
     r"\bGHz\b", r"\bdevice(s)?\b",
     r"\b\d+(\.\d+)?% (left|free|remaining|available)\b",
+    r"\b\d+(\.\d+)?%[^.\n]{0,40}?\b(available|free|left|remaining)\b",
     r"\b\d+(\.\d+)?% of .* (left|free|remaining)\b",
 ]
 _BANNED_RE = re.compile("|".join(BANNED_TERMS), re.IGNORECASE)
 
-SYSTEM_PROMPT = """You are Manny, the friendly computer caretaker for the CareKeeper service. \
-You talk to a family, not to technicians. Rules:
+# ---------------------------------------------------------------------------
+# Personas (CAREKEEPER-PERSONA.md, locked roster). Profiles change the voice,
+# never the skeleton: every persona shares the dictionary, honesty rules,
+# permission classes, and templates below. Switching is a config line.
+# ---------------------------------------------------------------------------
+PERSONAS = {
+    "manny": {
+        "name": "Manny",
+        "role": "the friendly handyman - the neighbor who's good with his "
+                "hands. Warm, plain-spoken, a little dry humor. Explains "
+                "just enough, never too much.",
+        "voice": "Warm and friendly. Light humor. Medium explanation depth.",
+        "opening": "Hi! Here's how your computers are doing:",
+        "reframe": "I keep computers healthy, not crowds laughing. But I can "
+                   "tell you everything I've been doing on your machines - "
+                   "that's my kind of fun.",
+    },
+    "steady": {
+        "name": "Steady",
+        "role": "the quiet professional - the property manager who runs a "
+                "tight building. Calm, direct, zero small talk, never wastes "
+                "your time. Task-first, always.",
+        "voice": "Calm and direct. No small talk, no emoji, no fluff. "
+                 "Minimal explanation. Every sentence carries information.",
+        "opening": "Status:",
+        "reframe": "I'm your computer caretaker, not a chat assistant. "
+                   "Status report is ready when you want it.",
+    },
+    "sage": {
+        "name": "Sage",
+        "role": "the patient teacher - the shop teacher who genuinely loves "
+                "when you learn something. Explains generously when invited, "
+                "never talks down, always encourages.",
+        "voice": "Warm and encouraging. Gentle humor. Explains a little more "
+                 "when it helps, never talks down.",
+        "opening": "Here's the health of your family's computers:",
+        "reframe": "Good question to ask a chatbot - but I'm your machines' "
+                   "keeper, so my skills are all about them. Want the tour "
+                   "of what I watch?",
+    },
+    "guardian": {
+        "name": "Guardian",
+        "role": "the quiet security professional who is always on your side. "
+                "Vigilant, reassuring, framed around safety and privacy.",
+        "voice": "Vigilant and reassuring. No humor. Frames everything "
+                 "around safety and privacy. Medium explanation depth.",
+        "opening": "All clear. Status:",
+        "reframe": "I'm your family's computer guardian - I watch the "
+                   "machines, I don't chat. Status report is ready when "
+                   "you want it.",
+    },
+    "tidy": {
+        "name": "Tidy",
+        "role": "the housekeeper who keeps things in order and clucks fondly "
+                "at clutter. Cozy, domestic warmth, gentle humor about "
+                "digital messes.",
+        "voice": "Cozy and warm. Gentle domestic humor. Medium explanation "
+                 "depth.",
+        "opening": "Good morning, dear! The house is in order - here's how "
+                   "things stand:",
+        "reframe": "I keep your computers tidy, dear - I don't chat for "
+                   "sport. But I can show you exactly what I've been "
+                   "tidying!",
+    },
+}
+
+
+def get_persona(cfg: dict) -> dict:
+    """Return the persona dict from config (default: Manny)."""
+    name = str(cfg.get("persona", "manny")).strip().lower()
+    return PERSONAS.get(name, PERSONAS["manny"])
+
+
+_SYSTEM_RULES = """Rules:
 1. Explain the health of their computers in plain, warm language. No jargon.
 2. Never use these words or ideas: partition, patch, reboot, malware, virus, daemon, package, RAM, CPU, GPU, SSD, uptime, SMART, temperature readings, telemetry, metric, mount, reallocated.
 3. Say "storage" for disk space, "restart" for reboot, "security update" for patch, "check for bad stuff" for malware scans, "drive health" for SMART.
@@ -42,13 +115,20 @@ You talk to a family, not to technicians. Rules:
 5. If a check could not run (drive health unknown), say the check could not run - do NOT claim the drives are fine or that there are no signs of trouble. Honesty over reassurance.
 6. Never mention load numbers, temperatures, or how long a computer has been running - those are technician details. Say "running smoothly" or "working hard" instead.
 Rule: Always say how FULL storage is (for example "storage is 82% full"). Never say how much is left ("82% left" or "18% free") - that flips the meaning and can hide a problem.
-7. If something needs attention, say what a family member should know and what Manny recommends - always with their permission before anything is changed.
+7. If something needs attention, say what a family member should know and what you recommend - always with their permission before anything is changed.
 8. Keep it to 6-8 short sentences, friendly but professional. Never invent facts that are not in the telemetry provided."""
 
 
-def _ask_brain(cfg, telemetry, extra_rule: str = "") -> str:
+def build_system_prompt(persona: dict) -> str:
+    return (f"You are {persona['name']}, {persona['role']} You talk to a "
+            f"family, not to technicians. Voice: {persona['voice']}\n"
+            + _SYSTEM_RULES)
+
+
+def _ask_brain(cfg, telemetry, extra_rule: str = "", persona: dict = None) -> str:
     url = cfg["brain"]["url"] + "/chat/completions"
-    system = SYSTEM_PROMPT
+    persona = persona or get_persona(cfg)
+    system = build_system_prompt(persona)
     if extra_rule:
         system += "\n8. You previously used banned words. This time ABSOLUTELY avoid: " + extra_rule
     payload = {
@@ -71,15 +151,16 @@ def _ask_brain(cfg, telemetry, extra_rule: str = "") -> str:
     return data["choices"][0]["message"]["content"].strip()
 
 
-def _template_report(tele) -> str:
+def _template_report(tele, persona: dict = None) -> str:
     """Deterministic plain-language fallback when the brain is offline."""
+    p = persona or PERSONAS["manny"]
     d = tele["disk"]
     worst = d["worst_pct"]
     lines = []
     if worst is not None:
         if worst >= 92:
             lines.append(f"Your main storage is {worst}% full - that's a lot. "
-                         "Manny recommends making room soon.")
+                         f"{p['name']} recommends making room soon.")
         elif worst >= 85:
             lines.append(f"Your main storage is {worst}% full. Worth keeping an eye on.")
         else:
@@ -93,7 +174,7 @@ def _template_report(tele) -> str:
                          + ", ".join(s["dev"] for s in bad)
                          + ". Back up important files as soon as possible.")
         elif unknown:
-            lines.append("Manny could not check the drive health on "
+            lines.append(f"{p['name']} could not check the drive health on "
                          + ", ".join(s["dev"] for s in unknown)
                          + " - not a problem found, just a check that "
                            "couldn't run.")
@@ -111,13 +192,13 @@ def _template_report(tele) -> str:
     if pending is not None:
         if pending:
             lines.append(f"There are {pending} security updates waiting. "
-                         "Manny can install them with your OK.")
+                         f"{p['name']} can install them with your OK.")
         else:
             lines.append("No security updates waiting - everything is up to date.")
     load_state = tele["load"].get("state")
     if load_state == "crit":
         lines.append("The computer has been working unusually hard lately - "
-                     "Manny suggests a restart when convenient.")
+                     f"{p['name']} suggests a restart when convenient.")
     elif load_state == "warn":
         lines.append("The computer has been a bit busy lately, but nothing to worry about.")
     else:
@@ -130,8 +211,7 @@ def check_dictionary(report: str) -> list:
     return sorted(set(m.group(0).lower() for m in _BANNED_RE.finditer(report)))
 
 
-FLEET_PROMPT = """You are Manny, the friendly computer caretaker for the CareKeeper service. \
-You look after a family's computers and report on ALL of them in one message. Rules:
+_FLEET_RULES = """Rules (the same for every report):
 1. Explain the health of every computer in plain, warm language. No jargon.
 2. Never use these words or ideas: partition, patch, reboot, malware, virus, daemon, package, RAM, CPU, GPU, SSD, uptime, SMART, temperature readings, telemetry, metric, mount, reallocated.
 3. Say "storage" for disk space, "restart" for reboot, "security update" for patch, "drive health" for SMART.
@@ -143,6 +223,26 @@ Rule: Always say how FULL storage is (for example "storage is 82% full"). Never 
 8. If a check could not run (drive health unknown, or a computer could not be reached), say so honestly - do NOT claim things are fine.
 9. Start with one friendly opening line, then one short line per computer (name it the way a family would: "M7", "the main machine", "the Dell"), then one closing line with any recommendation. Never invent facts not in the telemetry.
 10. Keep it to 8-12 short sentences total."""
+
+
+def build_fleet_prompt(persona: dict) -> str:
+    return (f"You are {persona['name']}, {persona['role']} You look after a "
+            f"family's computers and report on ALL of them in one message. "
+            f"Voice: {persona['voice']}\n" + _FLEET_RULES)
+
+
+_WEEKLY_RULES = _FLEET_RULES + """
+11. This is the WEEKLY review. Structure it as: one warm opening line; then
+    one or two lines per computer (how the week went + current health);
+    then what was fixed or approved this week (or that nothing needed
+    touching); then one closing line with any recommendation for the week
+    ahead. Keep it to 12-16 short sentences."""
+
+
+def build_weekly_prompt(persona: dict) -> str:
+    return (f"You are {persona['name']}, {persona['role']} You look after a "
+            f"family's computers and give them a weekly review. "
+            f"Voice: {persona['voice']}\n" + _WEEKLY_RULES)
 
 
 FRIENDLY_NAMES = {
@@ -214,9 +314,10 @@ def fleet_report(cfg, machines: dict):
     """
     bullets = plain_bullets(machines)
     facts = "\n".join(f"- {b}" for b in bullets)
+    persona = get_persona(cfg)
 
     def _ask(extra_rule: str = None):
-        system = FLEET_PROMPT
+        system = build_fleet_prompt(persona)
         if extra_rule:
             system += ("\n10. You previously used banned words. This time "
                        "ABSOLUTELY avoid: " + extra_rule)
@@ -242,7 +343,137 @@ def fleet_report(cfg, machines: dict):
         return data["choices"][0]["message"]["content"].strip()
 
     def _template():
-        lines = ["Hi! Here's how your family's computers are doing:"]
+        lines = [persona["opening"]]
+        lines += [f"- {b}" for b in bullets]
+        lines.append("If anything needs attention, I'll let you know here.")
+        return "\n".join(lines)
+
+    try:
+        report = _ask()
+    except Exception as exc:  # brain offline / timeout - honest template
+        return (_template() + f"\n\n[brain was offline - this report used "
+                f"the backup template: {exc}]"), []
+
+    violations = check_dictionary(report)
+    if violations:
+        try:
+            report = _ask(extra_rule=", ".join(sorted(violations)))
+        except Exception:
+            pass
+        violations = check_dictionary(report)
+        if violations:
+            return _template(), []
+    return report, []
+
+
+_FIX_LABELS = {
+    "rotate-logs": "log housekeeping",
+    "apply-package-updates": "installing the updates",
+}
+
+
+def week_bullets(stats: dict) -> list:
+    """Deterministic plain-language week facts from audit stats (no LLM).
+
+    Honesty rules: only genuine executions count as fixes; only owner
+    denials count as denials; safety-lock tests are reported as exactly
+    that. Output is clean by construction (never contains banned words),
+    so the deterministic template always passes the dictionary gate.
+    """
+    lines = []
+    if not stats.get("readable"):
+        lines.append("The week's logbook couldn't be read - the daily checks "
+                     "still ran, but this review is partial.")
+        return lines
+    checks_ok = stats.get("checks_ok", {})
+    checks_fail = stats.get("checks_fail", {})
+    if checks_ok:
+        parts = []
+        for dev, count in sorted(checks_ok.items()):
+            name = FRIENDLY_NAMES.get(dev, dev)
+            fail = checks_fail.get(dev, 0)
+            if fail == 0:
+                parts.append(f"{name} was reached {count} times - every day")
+            elif fail == 1:
+                parts.append(f"{name} was reached {count} times - once it "
+                             "couldn't be reached")
+            else:
+                parts.append(f"{name} was reached {count} times - {fail} "
+                             "times it couldn't be reached")
+        lines.append("The weekly checks ran: " + "; ".join(parts) + ".")
+    # only genuine executions count as fixes
+    fixes = [rn for rn, reason in stats.get("fixes", [])
+             if reason.startswith("approved fix executed")
+             or reason.startswith("approved upgrade")]
+    # only owner denials count as denials; the rest are safety-lock tests
+    denials = [rn for rn, reason in stats.get("denials", [])
+               if reason.startswith("owner denied")]
+    locks = [rn for rn, reason in stats.get("denials", [])
+             if not reason.startswith("owner denied")]
+    if fixes:
+        n = len(fixes)
+        labels = [_FIX_LABELS.get(rn.split(".", 1)[-1], "a safe fix")
+                  for rn in fixes]
+        lines.append(f"{n} safe {'fix' if n == 1 else 'fixes'} "
+                     f"{'was' if n == 1 else 'were'} completed this week: "
+                     + ", ".join(labels) + ".")
+    else:
+        lines.append("No fixes were needed this week - nothing had to be "
+                     "touched.")
+    if denials:
+        n = len(denials)
+        lines.append(f"{n} fix {'was' if n == 1 else 'were'} declined - "
+                     "nothing was changed.")
+    if locks:
+        lines.append("The safety locks were tested and held - no fix ran "
+                     "without a fresh approval.")
+    msg = stats.get("messages", 0)
+    if msg:
+        s = "s" if msg != 1 else ""
+        lines.append(f"{msg} check-in message{s} "
+                     f"{'were' if msg != 1 else 'was'} sent to the family "
+                     "chat this week.")
+    return lines
+
+
+def weekly_report(cfg, machines: dict, stats: dict):
+    """Week-in-review report. Same gate discipline as fleet_report:
+    code prepares the facts, brain composes, dictionary verifies,
+    retry once, else guaranteed-clean template."""
+    wb = week_bullets(stats)
+    bullets = plain_bullets(machines)
+    facts = "\n".join(f"- {b}" for b in wb + bullets)
+    persona = get_persona(cfg)
+
+    def _ask(extra_rule: str = None):
+        system = build_weekly_prompt(persona)
+        if extra_rule:
+            system += ("\n12. You previously used banned words. This time "
+                       "ABSOLUTELY avoid: " + extra_rule)
+        url = cfg["brain"]["url"] + "/chat/completions"
+        req = urllib.request.Request(
+            url, data=json.dumps({
+                "model": cfg["brain"].get("model", "granite-4.1-3b-q4"),
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content":
+                     "Here are the verified facts about the family's "
+                     "computers this week (week facts first, then current "
+                     "health). Write the weekly review using ONLY these "
+                     "facts:\n" + facts},
+                ],
+                "temperature": 0.4,
+                "max_tokens": 500,
+            }).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req,
+                                    timeout=cfg["brain"]["timeout_s"]) as resp:
+            data = json.loads(resp.read().decode())
+        return data["choices"][0]["message"]["content"].strip()
+
+    def _template():
+        lines = [persona["opening"]]
+        lines += [f"- {b}" for b in wb]
         lines += [f"- {b}" for b in bullets]
         lines.append("If anything needs attention, I'll let you know here.")
         return "\n".join(lines)
@@ -273,10 +504,11 @@ def make_report(cfg, telemetry: dict):
     fails, fall back to the guaranteed-clean template. Never ship a report
     that fails the gate.
     """
+    persona = get_persona(cfg)
     try:
-        report = _ask_brain(cfg, telemetry)
+        report = _ask_brain(cfg, telemetry, persona=persona)
     except Exception as exc:  # brain offline / timeout - be honest, use template
-        return _template_report(telemetry) + (
+        return _template_report(telemetry, persona) + (
             f"\n\n[brain was offline - this report used the backup template: {exc}]"
         ), []
 
@@ -285,12 +517,13 @@ def make_report(cfg, telemetry: dict):
         # one retry with the banned words spelled out
         try:
             report = _ask_brain(cfg, telemetry,
-                                extra_rule=", ".join(sorted(violations)))
+                                extra_rule=", ".join(sorted(violations)),
+                                persona=persona)
         except Exception:
             pass
         violations = check_dictionary(report)
         if violations:
-            report = _template_report(telemetry)
+            report = _template_report(telemetry, persona)
             return report, []
     return report, []
 

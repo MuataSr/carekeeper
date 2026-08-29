@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -21,7 +22,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
 from care_agent import load_config, get_audit
-from brain import fleet_report
+from brain import fleet_report, weekly_report
 from manny_bot import TelegramBot
 
 REGISTRY = os.path.join(BASE, "state", "devices.json")
@@ -109,15 +110,59 @@ def collect_all(cfg) -> dict:
     return machines
 
 
+def week_audit_stats(cfg) -> dict:
+    """Summarize the last 7 days of hub audit events (read-only).
+
+    Reads the same hash-chained audit DB the daily checks write to.
+    Never fabricates: if the logbook can't be read, readable=False and
+    the weekly report says so honestly.
+    """
+    db = cfg["audit"]["db"]
+    since = time.time() - 7 * 86400
+    stats = {"readable": True, "checks_ok": {}, "checks_fail": {},
+             "fixes": [], "denials": [], "messages": 0, "dashboards": 0}
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT resource_type, resource_name, allowed, reason "
+            "FROM audit_chain WHERE timestamp >= ?", (since,)).fetchall()
+        conn.close()
+    except Exception:
+        stats["readable"] = False
+        return stats
+    for r in rows:
+        rt, rn, ok = r["resource_type"], r["resource_name"], bool(r["allowed"])
+        if rt == "telemetry" and rn.startswith("device."):
+            dev = rn.split(".", 1)[1]
+            bucket = stats["checks_ok"] if ok else stats["checks_fail"]
+            bucket[dev] = bucket.get(dev, 0) + 1
+        elif rt == "tool":
+            (stats["fixes"] if ok else stats["denials"]).append(
+                (rn, r["reason"]))
+        elif rt == "report" and rn == "telegram.fleet" and ok:
+            stats["messages"] += 1
+        elif rt == "report" and rn == "telegram.dashboard" and ok:
+            stats["dashboards"] += 1
+    return stats
+
+
 def main():
     ap = argparse.ArgumentParser(description="CareKeeper fleet check")
     ap.add_argument("--once", action="store_true",
                     help="run one fleet check and deliver")
+    ap.add_argument("--weekly", action="store_true",
+                    help="run the weekly fleet review and deliver")
+    ap.add_argument("--persona", metavar="NAME",
+                    help="override the persona for this run "
+                         "(manny|steady|sage|guardian|tidy)")
     ap.add_argument("--no-send", action="store_true",
                     help="check + audit but do not send Telegram")
     args = ap.parse_args()
 
     cfg = load_config()
+    if args.persona:
+        cfg["persona"] = args.persona
     audit = get_audit(cfg["audit"]["db"])
     devices = load_devices()
 
@@ -135,12 +180,19 @@ def main():
                        "patches": tele.get("patches", {}).get("pending")})
 
     # brain report (gate-checked internally: retry once, then clean template)
-    report, violations = fleet_report(cfg, machines)
+    if args.weekly:
+        stats = week_audit_stats(cfg)
+        report, violations = weekly_report(cfg, machines, stats)
+    else:
+        report, violations = fleet_report(cfg, machines)
     print(report)
     print(f"[dictionary check: {'PASS' if not violations else 'FAIL'}]")
 
-    audit.log(cfg["device_id"], "report", "fleet.status", "write", True,
-              "fleet report generated",
+    audit.log(cfg["device_id"], "report",
+              "fleet.weekly" if args.weekly else "fleet.status",
+              "write", True,
+              "fleet weekly review generated" if args.weekly
+              else "fleet report generated",
               {"violations": violations, "devices": len(machines)})
 
     if args.no_send:

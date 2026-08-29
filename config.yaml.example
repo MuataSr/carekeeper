@@ -2,6 +2,8 @@
 device_id: my-device
 # tier: watch (free) | full (paid)  -> watch disables the fix executor
 tier: watch
+# persona: manny | steady | sage | guardian | tidy  (voice only, rules identical)
+persona: manny
 brain:
   url: http://127.0.0.1:8084/v1
   model: granite-4.1-3b-q4
@@ -16,6 +18,9 @@ telemetry:
   backup_max_age_hours: 48
   load_warn: 1.5
   load_crit: 3.0
+  # folders to watch as backups (each must exist; freshness checked daily):
+  #   backups:
+  #     - /home/you/backups
   backups: []
 actions:
   enabled: [rotate-logs]
