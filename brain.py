@@ -463,13 +463,15 @@ def week_bullets(stats: dict) -> list:
     return lines
 
 
-def weekly_report(cfg, machines: dict, stats: dict):
+def weekly_report(cfg, machines: dict, stats: dict,
+                  trends: list = None) -> tuple:
     """Week-in-review report. Same gate discipline as fleet_report:
     code prepares the facts, brain composes, dictionary verifies,
     retry once, else guaranteed-clean template."""
     wb = week_bullets(stats)
+    tb = trends or []
     bullets = plain_bullets(machines)
-    facts = "\n".join(f"- {b}" for b in wb + bullets)
+    facts = "\n".join(f"- {b}" for b in wb + tb + bullets)
     persona = get_persona(cfg)
 
     def _ask(extra_rule: str = None):
@@ -485,9 +487,9 @@ def weekly_report(cfg, machines: dict, stats: dict):
                     {"role": "system", "content": system},
                     {"role": "user", "content":
                      "Here are the verified facts about the family's "
-                     "computers this week (week facts first, then current "
-                     "health). Write the weekly review using ONLY these "
-                     "facts:\n" + facts},
+                     "computers this week (week facts first, then trends, "
+                     "then current health). Write the weekly review using "
+                     "ONLY these facts:\n" + facts},
                 ],
                 "temperature": 0.4,
                 "max_tokens": 500,
@@ -501,6 +503,7 @@ def weekly_report(cfg, machines: dict, stats: dict):
     def _template():
         lines = [persona["opening"]]
         lines += [f"- {b}" for b in wb]
+        lines += [f"- {b}" for b in tb]
         lines += [f"- {b}" for b in bullets]
         lines.append("If anything needs attention, I'll let you know here.")
         return "\n".join(lines)
