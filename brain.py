@@ -12,6 +12,7 @@ and say so - we never fabricate a report.
 """
 import json
 import re
+import sys
 import time
 import urllib.request
 
@@ -211,6 +212,30 @@ def check_dictionary(report: str) -> list:
     return sorted(set(m.group(0).lower() for m in _BANNED_RE.finditer(report)))
 
 
+_SAFE_MIN = ("Your computers were checked, but I can't write the report "
+             "properly right now. I'll try again at the next check.")
+
+
+def _offline_note(exc: Exception) -> str:
+    """The family copy gets a static, gate-clean note. The raw exception
+    goes to stderr (systemd journal) for the operator - never into the
+    shipped report, where it could leak jargon past the dictionary gate."""
+    print(f"[carekeeper brain unavailable: {exc}]", file=sys.stderr)
+    return "[brain was offline - this report used the backup template]"
+
+
+def _final_gate(report: str) -> str:
+    """Last line of defense: anything that still fails the dictionary
+    (template regressions included) is replaced with a hardcoded minimal
+    message that is clean by construction. Never ship a failing report."""
+    viol = check_dictionary(report)
+    if not viol:
+        return report
+    print(f"[carekeeper final gate: dropped report with {len(viol)} "
+          f"violations: {', '.join(viol)}]", file=sys.stderr)
+    return _SAFE_MIN
+
+
 _FLEET_RULES = """Rules (the same for every report):
 1. Explain the health of every computer in plain, warm language. No jargon.
 2. Never use these words or ideas: partition, patch, reboot, malware, virus, daemon, package, RAM, CPU, GPU, SSD, uptime, SMART, temperature readings, telemetry, metric, mount, reallocated.
@@ -354,8 +379,7 @@ def fleet_report(cfg, machines: dict):
     try:
         report = _ask()
     except Exception as exc:  # brain offline / timeout - honest template
-        return (_template() + f"\n\n[brain was offline - this report used "
-                f"the backup template: {exc}]"), []
+        return _final_gate(_template() + "\n\n" + _offline_note(exc)), []
 
     violations = check_dictionary(report)
     if violations:
@@ -365,7 +389,7 @@ def fleet_report(cfg, machines: dict):
             pass
         violations = check_dictionary(report)
         if violations:
-            return _template(), []
+            return _final_gate(_template()), []
     return report, []
 
 
@@ -484,8 +508,7 @@ def weekly_report(cfg, machines: dict, stats: dict):
     try:
         report = _ask()
     except Exception as exc:  # brain offline / timeout - honest template
-        return (_template() + f"\n\n[brain was offline - this report used "
-                f"the backup template: {exc}]"), []
+        return _final_gate(_template() + "\n\n" + _offline_note(exc)), []
 
     violations = check_dictionary(report)
     if violations:
@@ -495,7 +518,7 @@ def weekly_report(cfg, machines: dict, stats: dict):
             pass
         violations = check_dictionary(report)
         if violations:
-            return _template(), []
+            return _final_gate(_template()), []
     return report, []
 
 
@@ -511,9 +534,8 @@ def make_report(cfg, telemetry: dict):
     try:
         report = _ask_brain(cfg, telemetry, persona=persona)
     except Exception as exc:  # brain offline / timeout - be honest, use template
-        return _template_report(telemetry, persona) + (
-            f"\n\n[brain was offline - this report used the backup template: {exc}]"
-        ), []
+        return _final_gate(_template_report(telemetry, persona)
+                           + "\n\n" + _offline_note(exc)), []
 
     violations = check_dictionary(report)
     if violations:
@@ -526,8 +548,7 @@ def make_report(cfg, telemetry: dict):
             pass
         violations = check_dictionary(report)
         if violations:
-            report = _template_report(telemetry, persona)
-            return report, []
+            return _final_gate(_template_report(telemetry, persona)), []
     return report, []
 
 
