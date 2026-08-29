@@ -180,7 +180,9 @@ class _LocalAuditTrail:
             "SELECT * FROM audit_chain ORDER BY row_id DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        cols = [d[0] for d in self._conn.execute("PRAGMA table_info(audit_chain)")]
+        # PRAGMA table_info columns: cid, name, type, ... -> name is d[1].
+        # (d[0] is the cid integer - using it silently breaks every key.)
+        cols = [d[1] for d in self._conn.execute("PRAGMA table_info(audit_chain)")]
         return [dict(zip(cols, r)) for r in rows]
 
     def verify_chain(self):
