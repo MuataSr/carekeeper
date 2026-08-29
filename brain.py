@@ -166,7 +166,8 @@ def _template_report(tele, persona: dict = None) -> str:
             lines.append(f"Your main storage is {worst}% full. Worth keeping an eye on.")
         else:
             lines.append(f"Your main storage is {worst}% full - looking healthy.")
-    smart = tele["smart"]["devices"]
+    smart_data = tele["smart"]
+    smart = smart_data["devices"]
     if smart:
         bad = [s for s in smart if s["health"] == "FAIL"]
         unknown = [s for s in smart if s["health"] == "unknown"]
@@ -181,6 +182,12 @@ def _template_report(tele, persona: dict = None) -> str:
                            "couldn't run.")
         else:
             lines.append("Drive health checks passed - the drives are in good shape.")
+    elif smart_data.get("note") == "smartctl not installed":
+        lines.append(
+            "The drive health check couldn't run because the tool it needs isn't installed."
+        )
+    elif smart_data.get("note") == "no SMART-capable drives":
+        lines.append("The drive health check couldn't run because no compatible drives were found.")
     backups = tele["backups"]["results"]
     if backups:
         stale = [b for b in backups if b.get("stale")]
@@ -319,9 +326,17 @@ def plain_bullets(machines: dict) -> list:
                 facts.append("backup folder is older than expected")
             else:
                 facts.append("backup folder looks fresh")
-        smart = tele.get("smart", {}).get("devices", [])
+        smart_data = tele.get("smart", {})
+        smart = smart_data.get("devices", [])
         if not smart:
-            facts.append("drive health couldn't be checked")
+            if smart_data.get("note") == "smartctl not installed":
+                facts.append("drive health couldn't be checked because its tool isn't installed")
+            elif smart_data.get("note") == "no SMART-capable drives":
+                facts.append(
+                    "drive health couldn't be checked because no compatible drives were found"
+                )
+            else:
+                facts.append("drive health couldn't be checked")
         elif any(s.get("health") == "FAIL" for s in smart):
             facts.append("drive health needs attention")
         else:

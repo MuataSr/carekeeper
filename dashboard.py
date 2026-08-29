@@ -87,7 +87,8 @@ def status_of(tele: dict) -> tuple:
         return "your main drive is nearly full", RED
     if disk is not None and disk >= 85:
         return "your main drive is getting full", AMBER
-    smart = tele.get("smart", {}).get("devices", [])
+    smart_data = tele.get("smart", {})
+    smart = smart_data.get("devices", [])
     if any(s.get("health") == "FAIL" for s in smart):
         return "one of your drives has a problem", RED
     stale = any(b.get("stale") for b in tele.get("backups", {}).get("results", []))
@@ -102,6 +103,10 @@ def status_of(tele: dict) -> tuple:
     if pending and pending > 0:
         n = "update" if pending == 1 else "updates"
         return f"{pending} {n} ready — waiting on your OK", AMBER
+    if not smart and smart_data.get("note") == "smartctl not installed":
+        return "drive health tool isn't installed", GRAY
+    if not smart and smart_data.get("note") == "no SMART-capable drives":
+        return "no compatible drives for the health check", GRAY
     # unrun checks: honesty over reassurance
     if disk is None:
         return "storage couldn't be checked", GRAY
@@ -123,7 +128,8 @@ def row_text(tele: dict) -> tuple:
         return "your main drive is nearly full — Manny is on it", RED
     if disk is not None and disk >= 85:
         return "your main drive is getting full", AMBER
-    smart = tele.get("smart", {}).get("devices", [])
+    smart_data = tele.get("smart", {})
+    smart = smart_data.get("devices", [])
     if any(s.get("health") == "FAIL" for s in smart):
         return "one of your drives has a problem", RED
     stale = any(b.get("stale") for b in tele.get("backups", {}).get("results", []))
@@ -138,6 +144,10 @@ def row_text(tele: dict) -> tuple:
     if pending and pending > 0:
         n = "update" if pending == 1 else "updates"
         return f"{pending} {n} ready — waiting on your OK", AMBER
+    if not smart and smart_data.get("note") == "smartctl not installed":
+        return "drive health tool isn't installed", GRAY
+    if not smart and smart_data.get("note") == "no SMART-capable drives":
+        return "no compatible drives for the health check", GRAY
     # unrun checks: honesty over reassurance
     if disk is None:
         return "storage couldn't be checked", GRAY

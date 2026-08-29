@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -222,6 +223,9 @@ def telemetry_disk():
 
 def telemetry_smart():
     """Drive health via smartctl -H -A. Read-only."""
+    if shutil.which("smartctl") is None:
+        return {"devices": [], "note": "smartctl not installed"}
+
     out, rc = _run(["smartctl", "--scan"])
     devices = []
     for line in out.splitlines():
@@ -247,6 +251,8 @@ def telemetry_smart():
                         temp = int(cols[9])
             devices.append({"dev": dev, "health": status,
                             "reallocated_sectors": realloc, "temp_c": temp})
+    if not devices:
+        return {"devices": [], "note": "no SMART-capable drives"}
     return {"devices": devices}
 
 
