@@ -72,7 +72,12 @@ def truncate(draw, txt, f, max_w):
 # Status → plain-language sentence (design rule: honest, no jargon)
 # ---------------------------------------------------------------------------
 def status_of(tele: dict) -> tuple:
-    """Return (plain_label, color) for a device telemetry dict."""
+    """Return (plain_label, color) for a device telemetry dict.
+
+    Honesty rule (locked): an unrun check is NEVER rendered as
+    'up to date'. Real problems (full disk, failing drive, stale or
+    missing backups, pending updates) always outrank an unknown check.
+    """
     if isinstance(tele, dict) and "error" in tele:
         if "not enrolled yet" in tele["error"]:
             return "not set up yet", GRAY
@@ -93,10 +98,15 @@ def status_of(tele: dict) -> tuple:
         return "a backup folder is missing", AMBER
     if any(b.get("empty") for b in bres):
         return "backup folder is empty", AMBER
-    pending = tele.get("patches", {}).get("pending", 0)
+    pending = tele.get("patches", {}).get("pending")
     if pending and pending > 0:
         n = "update" if pending == 1 else "updates"
         return f"{pending} {n} ready — waiting on your OK", AMBER
+    # unrun checks: honesty over reassurance
+    if disk is None:
+        return "storage couldn't be checked", GRAY
+    if pending is None:
+        return "update check couldn't run", GRAY
     if bres:
         return "up to date · backed up", GREEN
     return "up to date", GREEN
@@ -124,10 +134,15 @@ def row_text(tele: dict) -> tuple:
         return "a backup folder is missing", AMBER
     if any(b.get("empty") for b in bres):
         return "backup folder is empty", AMBER
-    pending = tele.get("patches", {}).get("pending", 0)
+    pending = tele.get("patches", {}).get("pending")
     if pending and pending > 0:
         n = "update" if pending == 1 else "updates"
         return f"{pending} {n} ready — waiting on your OK", AMBER
+    # unrun checks: honesty over reassurance
+    if disk is None:
+        return "storage couldn't be checked", GRAY
+    if pending is None:
+        return "update check couldn't run", GRAY
     if bres:
         return "up to date · backed up", CREAM_DIM
     return "up to date", CREAM_DIM
@@ -230,8 +245,10 @@ def render(machines: dict, cfg: dict = None, out_path: str = None) -> str:
     names = list(machines.keys())
     statuses = {n: status_of(t) for n, t in machines.items()}
 
-    # severity for the hero
-    order = {"critical": 0, "warn": 1, "offline": 2, "pending": 3, "ok": 4}
+    # severity for the hero (unknown checks rank below real warnings,
+    # above offline, because 'couldn't check' must never read as 'ok')
+    order = {"critical": 0, "warn": 1, "unknown": 2, "offline": 3,
+             "pending": 4, "ok": 5}
     worst = "ok"
     for n, (label, color) in statuses.items():
         if color == RED:
@@ -240,6 +257,8 @@ def render(machines: dict, cfg: dict = None, out_path: str = None) -> str:
             sev = "warn"
         elif "couldn't be reached" in label:
             sev = "offline"
+        elif "couldn't be checked" in label or "couldn't run" in label:
+            sev = "unknown"
         elif "not set up yet" in label:
             sev = "pending"
         else:
@@ -253,13 +272,18 @@ def render(machines: dict, cfg: dict = None, out_path: str = None) -> str:
     crit_n = sum(1 for n in names if statuses[n][1] == RED)
     off_n = sum(1 for n in names if statuses[n][1] == GRAY
                 and "couldn't be reached" in statuses[n][0])
+    unk_n = sum(1 for n in names if statuses[n][1] == GRAY
+                and ("couldn't be checked" in statuses[n][0]
+                     or "couldn't run" in statuses[n][0]))
     pend_n = sum(1 for n in names if statuses[n][1] == GRAY
-                 and "couldn't be reached" not in statuses[n][0])
+                 and "not set up yet" in statuses[n][0])
 
     if worst == "critical":
         title = "Something needs your attention."
     elif worst == "warn":
         title = "One thing needs your OK." if warn_n == 1 else "A few things need your OK."
+    elif worst == "unknown":
+        title = "One check couldn't run." if unk_n == 1 else f"{unk_n} checks couldn't run."
     elif worst == "offline":
         title = "One device couldn't be reached." if off_n == 1 else f"{off_n} devices couldn't be reached."
     elif worst == "pending":
@@ -272,6 +296,8 @@ def render(machines: dict, cfg: dict = None, out_path: str = None) -> str:
         sub_parts.append(f"{warn_n + crit_n} need{'s' if warn_n + crit_n == 1 else ''} your OK")
     if off_n:
         sub_parts.append(f"{off_n} couldn't be reached")
+    if unk_n:
+        sub_parts.append(f"{unk_n} check{'s' if unk_n != 1 else ''} couldn't run")
     if pend_n:
         sub_parts.append(f"{pend_n} not set up yet")
     if not sub_parts[1:]:
@@ -327,7 +353,14 @@ def render(machines: dict, cfg: dict = None, out_path: str = None) -> str:
     # --- hero ---
     y = head_h + 30
     cx, cy = PAD + 24, y + 24
-    hero_color = GREEN if worst == "ok" else (RED if worst == "critical" else AMBER)
+    if worst == "ok":
+        hero_color = GREEN
+    elif worst == "critical":
+        hero_color = RED
+    elif worst == "unknown":
+        hero_color = GRAY
+    else:
+        hero_color = AMBER
     d.ellipse([(cx - 24, cy - 24), (cx + 24, cy + 24)],
               outline=hero_color, width=2)
     d.line([(cx - 10, cy), (cx - 3, cy + 8), (cx + 11, cy - 9)],

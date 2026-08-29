@@ -270,12 +270,15 @@ def plain_bullets(machines: dict) -> list:
             facts.append(f"storage {pct}% full")
         else:
             facts.append("storage could not be checked")
-        patches = tele.get("patches", {}).get("pending", 0)
+        patches = tele.get("patches", {}).get("pending")
         if patches:
             facts.append(f"{patches} security update"
                          + ("s" if patches != 1 else "") + " waiting")
         elif patches == 0:
             facts.append("security updates are up to date")
+        else:
+            # honesty: a check that couldn't run is never 'up to date'
+            facts.append("security updates couldn't be checked")
         backups = tele.get("backups", {})
         if backups.get("error"):
             facts.append("backup check couldn't run")
