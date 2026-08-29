@@ -20,9 +20,9 @@ import urllib.parse
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
-from care_agent import (load_config, collect_telemetry, propose_fix,
+from care_agent import (load_config, propose_fix,
                         execute_fix, get_audit, ACTIONS)
-from brain import make_report, _template_report, get_persona
+from brain import fleet_report, get_persona
 
 TOKEN_PATH = os.path.join(BASE, "state", "bot_token.txt")
 
@@ -148,14 +148,14 @@ def handle_message(bot: TelegramBot, cfg: dict, msg: dict):
         bot.send(chat_id, help_text(cfg), parse_mode="Markdown")
     elif cmd == "/status":
         try:
-            tele = collect_telemetry(cfg)
-            report, violations = make_report(cfg, tele)
-            # gate-before-ship: violations are impossible now (make_report
-            # retries then falls back to the clean template), but guard anyway
+            # fleet-wide, matching the promise ("how are my computers doing")
+            from fleet_check import collect_all
+            machines = collect_all(cfg)
+            report, violations = fleet_report(cfg, machines)
+            # fleet_report never returns violations (it retries once, then
+            # falls back to the clean template), but guard anyway
             if violations:
-                report = ("I tried twice but my report came out too technical. "
-                          "Here's the plain version:\n\n"
-                          + _template_report(tele))
+                report = "I tried twice but my report came out too technical."
             bot.send(chat_id, report)
         except Exception as exc:
             bot.send(chat_id, f"I hit a snag checking things: {exc}")
