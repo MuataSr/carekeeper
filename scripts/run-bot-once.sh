@@ -2,7 +2,7 @@
 # CareKeeper: start edge brain, process pending Telegram updates once, stop brain.
 set -u
 SERVER=~/llama.cpp/build-cpu/bin/llama-server
-MODEL=/home/papichulo/.nanobot/models/granite/ibm-granite_granite-4.1-3b-Q4_K_M.gguf
+MODEL="${MODEL:-$HOME/.nanobot/models/granite/ibm-granite_granite-4.1-3b-Q4_K_M.gguf}"
 PORT=8084
 LOG=/tmp/ls-bot.log
 

@@ -188,7 +188,7 @@ def cmd_deploy(args):
     subprocess.run(["ssh", host,
                     f"sed -i 's/^device_id:.*/device_id: {args.name}/; "
                     f"s/^tier:.*/tier: {dev['tier']}/; "
-                    f"s|/home/papichulo/rig-keeper|{rhome}/carekeeper|g' {dest_conf}"],
+                    f"s|{BASE}|{rhome}/carekeeper|g' {dest_conf}"],
                    check=True)
     # 3) install wireguard conf + bring up wg0 (unless existing tunnel)
     if not args.skip_wg:
@@ -245,15 +245,17 @@ def cmd_deploy(args):
 
 
 def _add_hub_peer(wg_ip: str, pubkey: str):
-    conf = open(WG_CONF).read()
+    out = subprocess.run(["sudo", "cat", WG_CONF], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise RuntimeError(f"cannot read {WG_CONF}: {out.stderr[-200:]}")
+    conf = out.stdout
     if pubkey in conf:
         print("[wg] peer already present")
         return
     peer = f"\n[Peer]\nPublicKey = {pubkey}\nAllowedIPs = {wg_ip}/32\nPersistentKeepalive = 25\n"
-    with open(WG_CONF, "a") as f:
-        f.write(peer)
-    subprocess.run(["sudo", "wg", "syncconf", "wg0",
-                    "<(wg-quick strip wg0)"], shell=True, check=True)
+    subprocess.run(["sudo", "tee", "-a", WG_CONF], input=peer, text=True, check=True)
+    subprocess.run("sudo bash -c 'wg syncconf wg0 <(wg-quick strip wg0)'",
+                    shell=True, check=True)
     print(f"[wg] peer {wg_ip} added to hub")
 
 

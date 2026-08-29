@@ -1,0 +1,23 @@
+# CareKeeper — care agent config (copy to config.yaml and edit for your device)
+device_id: my-device
+# tier: watch (free) | full (paid)  -> watch disables the fix executor
+tier: watch
+brain:
+  url: http://127.0.0.1:8084/v1
+  model: granite-4.1-3b-q4
+  timeout_s: 300
+audit:
+  db: ./audit/carekeeper.db
+state_dir: ./state
+backup_dir: ./backups
+telemetry:
+  disk_warn_pct: 85
+  disk_crit_pct: 92
+  backup_max_age_hours: 48
+  load_warn: 1.5
+  load_crit: 3.0
+  backups: []
+actions:
+  enabled: [rotate-logs]
+telegram:
+  chat_id: REPLACE_WITH_YOUR_TELEGRAM_CHAT_ID

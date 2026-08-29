@@ -4,3 +4,7 @@ backups/
 state/
 *.log
 __pycache__/
+# enrollment keys + configs (never commit)
+enroll/
+# live config (use config.yaml.example)
+config.yaml

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CareKeeper — Customer Home View v2 (Report Style)</title>
+<style>
+  :root{
+    --navy:#0D1B2A; --navy2:#1B2E4A; --gold:#C8A951; --gold-dim:#A68A3E;
+    --cream:#F5F0E8; --cream-dim:#D4CFC7; --green:#2ECC71; --amber:#F39C12;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#0A1522;color:var(--cream);padding:28px 20px 40px;cursor:default}
+  a,button{cursor:default}
+  .frame{max-width:720px;margin:0 auto 36px;border-radius:16px;overflow:hidden;background:var(--navy);border:1px solid rgba(200,169,81,.2);box-shadow:0 12px 40px rgba(0,0,0,.45)}
+  .frame-label{max-width:720px;margin:0 auto 8px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold);font-weight:700}
+  .frame-label span{color:var(--cream-dim);font-weight:400;margin-left:8px;text-transform:none;letter-spacing:0}
+  /* report header — brand only, no nav */
+  .rhead{display:flex;align-items:center;justify-content:space-between;padding:16px 30px;background:linear-gradient(180deg,#0F1F33 0%,var(--navy) 100%);border-bottom:1px solid rgba(200,169,81,.12)}
+  .brand{display:flex;align-items:center;gap:10px}
+  .logo{width:28px;height:28px;border-radius:8px;background:var(--gold);color:var(--navy);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px}
+  .brand-name{font-weight:700;font-size:16px;color:var(--gold)}
+  .rhead .date{font-size:12.5px;color:var(--cream-dim)}
+  /* hero */
+  .hero{padding:32px 30px 24px;border-bottom:1px solid rgba(200,169,81,.1)}
+  .hero .status{display:flex;align-items:center;gap:14px}
+  .big-check{width:48px;height:48px;border-radius:50%;background:rgba(46,204,113,.14);border:2px solid var(--green);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .big-check svg{width:26px;height:26px;stroke:var(--green)}
+  .hero h1{font-size:27px;font-weight:800;letter-spacing:-.02em;line-height:1.15}
+  .hero p{color:var(--cream-dim);font-size:14.5px;margin-top:5px}
+  .hero .gold-line{color:var(--gold)}
+  /* list sections — receipt style, nothing clickable */
+  .sec{padding:20px 30px 6px}
+  .sec h2{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--cream-dim);font-weight:700;margin-bottom:4px}
+  .row{display:flex;align-items:baseline;gap:12px;padding:11px 0;border-bottom:1px solid rgba(200,169,81,.09);font-size:14.5px}
+  .row:last-child{border-bottom:none}
+  .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;transform:translateY(-1px)}
+  .dot.g{background:var(--green)} .dot.a{background:var(--amber)}
+  .row .name{color:var(--cream);font-weight:700;width:150px;flex-shrink:0}
+  .row .txt{color:var(--cream-dim)}
+  .row .txt b{color:var(--cream);font-weight:600}
+  .row .warn-txt{color:var(--amber)}
+  .safe{padding:18px 30px 6px}
+  .safe .line{display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--cream-dim);padding:5px 0}
+  .safe .line b{color:var(--green);font-weight:700}
+  .safe svg{width:16px;height:16px;stroke:var(--green);flex-shrink:0}
+  /* report footer — anti-click message */
+  .foot{padding:18px 30px 22px;margin-top:16px;background:rgba(200,169,81,.05);border-top:1px solid rgba(200,169,81,.14)}
+  .foot p{font-size:13px;color:var(--cream-dim);line-height:1.55}
+  .foot p b{color:var(--gold);font-weight:700}
+  .foot .meta{margin-top:8px;font-size:12px;color:var(--gold-dim)}
+  /* frame B: message card */
+  .msg{background:var(--navy2);border:1px solid rgba(200,169,81,.2);border-radius:14px;padding:20px 22px}
+  .msg .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+  .msg .head b{color:var(--gold);font-size:14.5px}
+  .msg .head span{font-size:12px;color:var(--cream-dim)}
+  .msg .big{font-size:16.5px;font-weight:700;color:var(--green);margin-bottom:12px}
+  .msg ul{list-style:none}
+  .msg li{font-size:14px;color:var(--cream);padding:6px 0;border-top:1px solid rgba(200,169,81,.08)}
+  .msg li b{color:var(--cream-dim);font-weight:600}
+  .msg li .ok{color:var(--green)}
+  .msg li .amber{color:var(--amber);font-weight:600}
+  .msg .tail{font-size:13px;color:var(--cream-dim);margin-top:12px;padding-top:12px;border-top:1px solid rgba(200,169,81,.2)}
+  .msg .tail b{color:var(--gold)}
+</style>
+</head>
+<body>
+
+<div class="frame-label">Frame A · Customer home view <span>reads like a report — nothing to click</span></div>
+<div class="frame">
+  <div class="rhead">
+    <div class="brand"><div class="logo">CK</div><div class="brand-name">CareKeeper</div></div>
+    <div class="date">Thursday morning · 7:32 AM</div>
+  </div>
+
+  <div class="hero">
+    <div class="status">
+      <div class="big-check">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg>
+      </div>
+      <div>
+        <h1>All clear — nothing needs you.</h1>
+        <p>4 devices checked · no action needed</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <h2>Your devices</h2>
+    <div class="row"><span class="dot g"></span><span class="name">Dad's laptop</span><span class="txt">Up to date · Backed up</span></div>
+    <div class="row"><span class="dot a"></span><span class="name">Kids' tablet</span><span class="txt warn-txt">1 update ready — waiting on your OK</span></div>
+    <div class="row"><span class="dot g"></span><span class="name">Living room PC</span><span class="txt">Up to date · <b>3 GB cleared</b> yesterday</span></div>
+    <div class="row"><span class="dot g"></span><span class="name">Office desktop</span><span class="txt">Up to date · Backed up</span></div>
+  </div>
+
+  <div class="safe">
+    <div class="line"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg><div><b>Backups:</b> all current</div></div>
+    <div class="line"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg><div><b>Security:</b> no problems found</div></div>
+  </div>
+
+  <div class="sec">
+    <h2>What CareKeeper did lately</h2>
+    <div class="row"><span class="dot g"></span><span class="name">Yesterday</span><span class="txt"><b>Updated 14 programs</b> on Dad's laptop</span></div>
+    <div class="row"><span class="dot g"></span><span class="name">Yesterday</span><span class="txt"><b>Cleared 3 GB of junk</b> from the living room PC</span></div>
+    <div class="row"><span class="dot g"></span><span class="name">Wednesday</span><span class="txt"><b>Backed up 1,204 new photos</b> from Dad's laptop</span></div>
+  </div>
+
+  <div class="foot">
+    <p>This is CareKeeper's automatic update. <b>Nothing here needs clicking</b> — if anything needs you, it comes to your messages.</p>
+    <div class="meta">CareKeeper by Mu2 Solutions</div>
+  </div>
+</div>
+
+<div class="frame-label">Frame B · Morning report <span>where the one action actually lives</span></div>
+<div class="frame">
+  <div style="padding:26px 28px">
+    <div class="msg">
+      <div class="head"><b>CareKeeper · Morning Report</b><span>7:30 AM</span></div>
+      <div class="big">✅ All clear on 4 devices</div>
+      <ul>
+        <li><b>Dad's laptop</b> — <span class="ok">up to date</span>, backed up</li>
+        <li><b>Kids' tablet</b> — 1 update ready · <span class="amber">reply Approve</span> to let Manny install it</li>
+        <li><b>Living room PC</b> — 3 GB of junk cleared</li>
+        <li><b>Office desktop</b> — <span class="ok">all good</span></li>
+      </ul>
+      <div class="tail">Backups current · No security problems — <b>nothing else needs you today</b>.</div>
+    </div>
+    <p style="font-size:13px;color:var(--cream-dim);margin-top:14px;line-height:1.6">The dashboard never asks for a click — the <b style="color:var(--gold)">message</b> is where "reply Approve" lives, and Manny handles the rest. Customers read; they don't operate.</p>
+  </div>
+</div>
+
+</body>
+</html>
