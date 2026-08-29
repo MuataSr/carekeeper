@@ -12,6 +12,7 @@ Modes:
 """
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.request
@@ -22,7 +23,7 @@ sys.path.insert(0, BASE)
 
 from care_agent import (load_config, propose_fix,
                         execute_fix, get_audit, ACTIONS)
-from brain import fleet_report, get_persona
+from brain import fleet_report, get_persona, FRIENDLY_NAMES
 
 TOKEN_PATH = os.path.join(BASE, "state", "bot_token.txt")
 
@@ -137,6 +138,141 @@ def approval_keyboard(action: str, token: str) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Remote fixes: the consent token is minted ON the device (care_agent.py owns
+# single-use + TTL + replay denial). The hub keeps only a routing record
+# (token -> device) so the Telegram approve button knows where to relay.
+# ---------------------------------------------------------------------------
+PENDING_REMOTE = os.path.join(BASE, "state", "pending-remote.json")
+
+
+def _load_pending_remote() -> dict:
+    try:
+        data = json.load(open(PENDING_REMOTE))
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    now = time.time()
+    stale = [t for t, r in data.items() if r.get("expires", 0) < now]
+    for t in stale:
+        del data[t]
+    if stale:
+        _save_pending_remote(data)
+    return data
+
+
+def _save_pending_remote(data: dict):
+    os.makedirs(os.path.dirname(PENDING_REMOTE), exist_ok=True)
+    with open(PENDING_REMOTE, "w") as f:
+        json.dump(data, f)
+
+
+def _resolve_device(arg: str):
+    """Map a user-supplied name to (registry_key, device_dict) or (None, None).
+
+    Accepts the registry key, its friendly name, or an unambiguous prefix
+    ('m7' -> m7-ultra, 'dell' -> dell-inspiron, 'the Dell' -> dell-inspiron).
+    """
+    from fleet_check import load_devices
+
+    devices = load_devices()
+    if not devices:
+        return None, None
+    arg = arg.strip().lower()
+    for key, dev in devices.items():
+        if key.lower() == arg:
+            return key, dev
+        if dev.get("friendly_name", "").lower() == arg:
+            return key, dev
+        if FRIENDLY_NAMES.get(key, "").lower() == arg:
+            return key, dev
+    matches = [k for k in devices if k.lower().startswith(arg)]
+    if len(matches) == 1:
+        return matches[0], devices[matches[0]]
+    return None, None
+
+
+def _device_ssh(dev: dict, command: str) -> tuple:
+    """Run a care_agent command on a remote device over SSH (BatchMode)."""
+    reach = dev.get("reach", {})
+    host = reach.get("ssh_host") or dev.get("host")
+    path = reach.get("path", "~/carekeeper/care_agent.py")
+    user = reach.get("user", "")
+    target = f"{user}@{host}" if user else host
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+           target, f"python3 {path} {command}"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        return out.stdout.strip(), out.returncode
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        return f"error: {exc}", -1
+
+
+def _propose_remote(cfg, audit, action, device_key, dev) -> dict:
+    """Mint the consent token on the device and record hub-side routing."""
+    from fleet_check import extract_json
+
+    out, rc = _device_ssh(dev, f"--propose {action}")
+    if rc != 0:
+        return {"error": f"couldn't reach {FRIENDLY_NAMES.get(device_key, device_key)}: "
+                         f"{out[-120:]}"}
+    try:
+        res = extract_json(out)
+    except ValueError as exc:
+        return {"error": f"bad response from {device_key}: {exc}"}
+    if "error" in res:
+        return res  # e.g. watch-tier denial - pass through verbatim
+    token = res.get("token")
+    if not token:
+        return {"error": f"no approval token from {device_key}"}
+    recs = _load_pending_remote()
+    recs[token] = {"action": action, "device": device_key,
+                   "expires": time.time() + 600}
+    _save_pending_remote(recs)
+    audit.log(cfg["device_id"], "tool", f"fix.{action}.{device_key}", "call",
+              True, "remote fix proposed; device token minted",
+              {"device": device_key, "token_hint": token[:8]})
+    res["device"] = device_key
+    return res
+
+
+def _execute_remote(cfg, audit, action, token) -> dict:
+    """Relay an approved token to the device; the device enforces + audits."""
+    from fleet_check import extract_json, load_devices
+
+    recs = _load_pending_remote()
+    rec = recs.get(token)
+    if not rec:
+        return {"error": "approval unknown or expired - run /propose again"}
+    device_key = rec.get("device", "")
+    dev = load_devices().get(device_key)
+    if not dev:
+        return {"error": f"{device_key} is no longer in the registry"}
+    if time.time() > rec.get("expires", 0):
+        del recs[token]
+        _save_pending_remote(recs)
+        return {"error": "approval expired"}
+    out, rc = _device_ssh(dev, f"--fix {action} --approve {token}")
+    if rc != 0:
+        audit.log(cfg["device_id"], "tool", f"fix.{action}.{device_key}",
+                  "write", False, f"remote fix failed: {out[-80:]}",
+                  {"device": device_key})
+        return {"error": f"the fix couldn't run on "
+                         f"{FRIENDLY_NAMES.get(device_key, device_key)}: {out[-120:]}"}
+    try:
+        res = extract_json(out)
+    except ValueError as exc:
+        return {"error": f"bad response from {device_key}: {exc}"}
+    del recs[token]
+    _save_pending_remote(recs)
+    if res.get("ok"):
+        audit.log(cfg["device_id"], "tool", f"fix.{action}.{device_key}",
+                  "write", True, "approved fix executed (remote)",
+                  {"device": device_key, "backup": res.get("backup")})
+        res["device"] = device_key
+        return res
+    return {"error": res.get("error", "the fix failed on the device")}
+
+
 def handle_message(bot: TelegramBot, cfg: dict, msg: dict):
     text = (msg.get("text") or "").strip()
     chat_id = msg["chat"]["id"]
@@ -160,16 +296,34 @@ def handle_message(bot: TelegramBot, cfg: dict, msg: dict):
         except Exception as exc:
             bot.send(chat_id, f"I hit a snag checking things: {exc}")
     elif cmd == "/propose":
-        action = text.split()[1] if len(text.split()) > 1 else ""
+        parts = text.split()
+        action = parts[1] if len(parts) > 1 else ""
+        device_arg = parts[2] if len(parts) > 2 else ""
         if not action or action not in ACTIONS:
             bot.send(chat_id, "Available safe fixes:\n"
-                              + "\n".join(f"• {a} - {v['desc']}" for a, v in ACTIONS.items()))
+                              + "\n".join(f"• {a} - {v['desc']}" for a, v in ACTIONS.items())
+                              + "\n\nUsage: /propose <fix> [device] "
+                              "(e.g. /propose rotate-logs dell)")
             return
         audit = get_audit(cfg["audit"]["db"])
-        res = propose_fix(cfg, audit, action)
+        device_disp = None
+        if device_arg:
+            key, dev = _resolve_device(device_arg)
+            if not key:
+                bot.send(chat_id, f"I don't see a device called '{device_arg}'. "
+                                  f"Try /dashboard for the list.")
+                return
+            device_disp = FRIENDLY_NAMES.get(key, key)
+            if dev and dev.get("reach", {}).get("local"):
+                res = propose_fix(cfg, audit, action)  # this computer
+            else:
+                res = _propose_remote(cfg, audit, action, key, dev)
+        else:
+            res = propose_fix(cfg, audit, action)
         if "token" in res:
+            where = f" on **{device_disp}**" if device_disp else ""
             bot.send(chat_id,
-                     f"Here's what I'd like to do:\n\n"
+                     f"Here's what I'd like to do{where}:\n\n"
                      f"**{action}** - {res['desc']}\n\n"
                      f"I'll back up everything first, and you can see every "
                      f"step in the logbook after. Approve?",
@@ -219,18 +373,28 @@ def handle_callback(bot: TelegramBot, cfg: dict, cb: dict):
     _, decision, action, token = parts
     audit = get_audit(cfg["audit"]["db"])
     if decision == "deny":
+        recs = _load_pending_remote()
+        meta = {"token_hint": token[:8]}
+        if token in recs:
+            meta["device"] = recs[token].get("device", "")
+            del recs[token]
+            _save_pending_remote(recs)
         audit.log(cfg["device_id"], "tool", f"fix.{action}", "call", False,
-                  "owner denied the fix in Telegram",
-                  {"token_hint": token[:8]})
+                  "owner denied the fix in Telegram", meta)
         bot.answer_callback(cb_id, "Understood - nothing was changed.")
         bot.send(chat_id, f"Understood, {action} is cancelled. Nothing was touched.")
         return
-    # approve
-    res = execute_fix(cfg, audit, action, token)
+    # approve: remote token if the hub has a routing record, else local
+    if token in _load_pending_remote():
+        res = _execute_remote(cfg, audit, action, token)
+    else:
+        res = execute_fix(cfg, audit, action, token)
     if res.get("ok"):
         bot.answer_callback(cb_id, "Done - backed up first, as promised.")
+        where = f" on **{FRIENDLY_NAMES.get(res['device'], res['device'])}**" \
+            if res.get("device") else ""
         bot.send(chat_id,
-                 f"✅ Done: **{action}**\n\n"
+                 f"✅ Done: **{action}**{where}\n\n"
                  f"Backup taken first: `{res['backup'].get('backup')}`\n"
                  f"Every step is in the logbook (/recent).",
                  parse_mode="Markdown")
