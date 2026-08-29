@@ -224,6 +224,9 @@ def main():
         audit.log(cfg["device_id"], "report", "telegram.fleet", "write",
                   False, f"delivery failed: {exc}")
         print(f"[delivery failed: {exc}]")
+        # unattended service: a missed delivery must be visible to systemd
+        # (OnFailure=carekeeper-alert.service), so exit non-zero.
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+[Unit]
+Description=CareKeeper failure alert (fired when a fleet check fails)
+# Triggered via OnFailure= on carekeeper-fleet.service / carekeeper-weekly.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/rig-keeper
+ExecStart=/usr/bin/python3 %h/rig-keeper/manny_bot.py --send "⚠️ A CareKeeper check failed to finish on the hub. See: systemctl --user status carekeeper-fleet carekeeper-weekly (journalctl --user -u carekeeper-fleet -u carekeeper-weekly -n 50)"
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=carekeeper-alert

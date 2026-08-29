@@ -2,11 +2,16 @@
 Description=CareKeeper fleet check (hub)
 After=carekeeper-brain.service
 Wants=carekeeper-brain.service
+OnFailure=carekeeper-alert.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/rig-keeper
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 %h/rig-keeper/fleet_check.py --once
+TimeoutStartSec=600
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=carekeeper-fleet
+PrivateTmp=true
+NoNewPrivileges=true
