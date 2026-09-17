@@ -77,20 +77,39 @@ def collect_local(cfg) -> dict:
         return {"error": f"bad telemetry: {exc}"}
 
 
+def reach_hosts(dev: dict) -> list:
+    """Candidate SSH hosts for a device, in priority order.
+
+    Primary is the WireGuard host; a same-LAN fallback (`lan_host`) lets
+    the fleet keep monitoring a device whose tunnel is down. Deduped.
+    """
+    reach = dev.get("reach", {})
+    hosts = []
+    for key in ("ssh_host", "lan_host"):
+        h = reach.get(key)
+        if h and h not in hosts:
+            hosts.append(h)
+    return hosts
+
+
 def collect_remote(dev: dict) -> dict:
     reach = dev.get("reach", {})
-    host = reach.get("ssh_host") or dev.get("host")
     path = reach.get("path", "~/carekeeper/care_agent.py")
     user = reach.get("user", "")
-    target = f"{user}@{host}" if user else host
-    out, rc = _run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                    target, f"python3 {path} --check"], timeout=90)
-    if rc != 0:
-        return {"error": (out or "ssh failed")[-200:]}
-    try:
-        return extract_json(out)
-    except ValueError as exc:
-        return {"error": f"bad telemetry: {exc}"}
+    last_err = {"error": "ssh failed"}
+    for host in reach_hosts(dev):
+        target = f"{user}@{host}" if user else host
+        out, rc = _run(["ssh", "-o", "BatchMode=yes", "-o",
+                        "ConnectTimeout=10", target,
+                        f"python3 {path} --check"], timeout=90)
+        if rc != 0:
+            last_err = {"error": (out or "ssh failed")[-200:]}
+            continue
+        try:
+            return extract_json(out)
+        except ValueError as exc:
+            return {"error": f"bad telemetry: {exc}"}
+    return last_err
 
 
 def collect_all(cfg) -> dict:
@@ -257,6 +276,42 @@ def trend_summary(cfg, window_days: int = 14) -> list:
     return lines
 
 
+def dark_device_summary(cfg, threshold: int = 3) -> list:
+    """Devices unreachable for a run of consecutive checks.
+
+    Honesty rules: counts only the most recent consecutive-miss run and
+    reports it once the run reaches `threshold` checks. A device that has
+    simply been off for a stretch reads as exactly that. Output is
+    gate-clean by construction (passes the dictionary gate).
+    """
+    db = cfg["audit"]["db"]
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT device, reachable FROM telemetry_snapshots "
+            "ORDER BY device, ts").fetchall()
+        conn.close()
+    except Exception:
+        return []
+    per = {}
+    for dev, reach in rows:
+        per.setdefault(dev, []).append(reach)
+    lines = []
+    for dev, seq in per.items():
+        n = 0
+        for r in reversed(seq):
+            if r == 0:
+                n += 1
+            else:
+                break
+        if n >= threshold:
+            name = FRIENDLY_NAMES.get(dev, dev)
+            lines.append(f"{name} couldn't be reached for the last {n} "
+                         f"checks in a row - it may be turned off or off "
+                         f"the network.")
+    return lines
+
+
 def main():
     ap = argparse.ArgumentParser(description="CareKeeper fleet check")
     ap.add_argument("--once", action="store_true",
@@ -296,7 +351,8 @@ def main():
     if args.weekly:
         stats = week_audit_stats(cfg)
         trends = trend_summary(cfg)
-        report, violations = weekly_report(cfg, machines, stats, trends)
+        dark = dark_device_summary(cfg)
+        report, violations = weekly_report(cfg, machines, stats, trends, dark)
     else:
         report, violations = fleet_report(cfg, machines)
     print(report)

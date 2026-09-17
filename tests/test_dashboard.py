@@ -71,6 +71,12 @@ def test_smart_fail_red(make_tele):
     assert color == RED
 
 
+def test_smart_empty_shows_unknown(make_tele):
+    label, color = status_of(make_tele(smart={"devices": []}))
+    assert label == "drive health couldn't be checked"
+    assert color == GRAY
+
+
 def test_unreachable_gray():
     label, color = status_of({"error": "ssh failed"})
     assert color == GRAY

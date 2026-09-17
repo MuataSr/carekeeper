@@ -155,3 +155,66 @@ def test_trend_lines_pass_gate(tmp_path):
     _seed_trends(db, "dell-inspiron", [61] * 5)
     lines = fleet_check.trend_summary({"audit": {"db": db}})
     assert brain.check_dictionary("\n".join(lines)) == []
+
+
+# ---------------------------------------------------------------------------
+# reach_hosts (LAN fallback) + dark-device escalation
+# ---------------------------------------------------------------------------
+def test_reach_hosts_prefers_wg_then_lan():
+    dev = {"reach": {"ssh_host": "10.0.0.3", "lan_host": "192.168.1.44"}}
+    assert fleet_check.reach_hosts(dev) == ["10.0.0.3", "192.168.1.44"]
+
+
+def test_reach_hosts_missing_and_dedup():
+    assert fleet_check.reach_hosts(
+        {"reach": {"ssh_host": "10.0.0.3"}}) == ["10.0.0.3"]
+    assert fleet_check.reach_hosts(
+        {"reach": {"ssh_host": "10.0.0.3",
+                   "lan_host": "10.0.0.3"}}) == ["10.0.0.3"]
+    assert fleet_check.reach_hosts({}) == []
+
+
+def _seed_reach_seq(db_path, device, seq):
+    conn = sqlite3.connect(db_path)
+    conn.execute(_SCHEMA)
+    now = time.time()
+    for i, r in enumerate(seq):
+        ts = now - (len(seq) - 1 - i) * 86400
+        if r:
+            conn.execute(
+                "INSERT INTO telemetry_snapshots (ts, device, disk_worst_pct, "
+                "patches_pending, backup_ok, smart_ok, reachable) "
+                "VALUES (?,?,?,?,?,?,1)", (ts, device, 50, 0, 1, 1))
+        else:
+            conn.execute(
+                "INSERT INTO telemetry_snapshots (ts, device, reachable) "
+                "VALUES (?,?,0)", (ts, device))
+    conn.commit()
+    conn.close()
+
+
+def test_dark_device_reports_after_threshold(tmp_path):
+    db = str(tmp_path / "t.db")
+    _seed_reach_seq(db, "dell-inspiron", [1, 0, 0, 0, 0])
+    lines = fleet_check.dark_device_summary({"audit": {"db": db}})
+    assert any("the Dell" in l and "4 checks in a row" in l for l in lines)
+
+
+def test_dark_device_silent_under_threshold(tmp_path):
+    db = str(tmp_path / "t.db")
+    _seed_reach_seq(db, "dell-inspiron", [1, 0, 0])
+    assert fleet_check.dark_device_summary({"audit": {"db": db}}) == []
+
+
+def test_dark_device_interrupted_streak_silent(tmp_path):
+    db = str(tmp_path / "t.db")
+    # came back online on the last check -> trailing miss run is 0
+    _seed_reach_seq(db, "dell-inspiron", [0, 0, 0, 1])
+    assert fleet_check.dark_device_summary({"audit": {"db": db}}) == []
+
+
+def test_dark_lines_pass_gate(tmp_path):
+    db = str(tmp_path / "t.db")
+    _seed_reach_seq(db, "dell-inspiron", [1, 0, 0, 0, 0])
+    lines = fleet_check.dark_device_summary({"audit": {"db": db}})
+    assert brain.check_dictionary("\n".join(lines)) == []

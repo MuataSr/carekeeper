@@ -107,6 +107,8 @@ def status_of(tele: dict) -> tuple:
         return "storage couldn't be checked", GRAY
     if pending is None:
         return "update check couldn't run", GRAY
+    if not smart:
+        return "drive health couldn't be checked", GRAY
     if bres:
         return "up to date · backed up", GREEN
     return "up to date", GREEN
@@ -143,6 +145,8 @@ def row_text(tele: dict) -> tuple:
         return "storage couldn't be checked", GRAY
     if pending is None:
         return "update check couldn't run", GRAY
+    if not smart:
+        return "drive health couldn't be checked", GRAY
     if bres:
         return "up to date · backed up", CREAM_DIM
     return "up to date", CREAM_DIM

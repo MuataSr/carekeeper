@@ -192,19 +192,31 @@ def _resolve_device(arg: str):
 
 
 def _device_ssh(dev: dict, command: str) -> tuple:
-    """Run a care_agent command on a remote device over SSH (BatchMode)."""
+    """Run a care_agent command on a remote device over SSH (BatchMode).
+
+    Tries the WireGuard host first, then any same-LAN fallback host, so a
+    device whose tunnel is down is still reachable on the home network.
+    """
+    from fleet_check import reach_hosts
+
     reach = dev.get("reach", {})
-    host = reach.get("ssh_host") or dev.get("host")
     path = reach.get("path", "~/carekeeper/care_agent.py")
     user = reach.get("user", "")
-    target = f"{user}@{host}" if user else host
-    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-           target, f"python3 {path} {command}"]
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-        return out.stdout.strip(), out.returncode
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        return f"error: {exc}", -1
+    last = ("ssh failed", -1)
+    for host in reach_hosts(dev):
+        target = f"{user}@{host}" if user else host
+        cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+               target, f"python3 {path} {command}"]
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True,
+                                 timeout=90)
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            last = (f"error: {exc}", -1)
+            continue
+        if out.returncode == 0:
+            return out.stdout.strip(), out.returncode
+        last = (out.stdout.strip(), out.returncode)
+    return last
 
 
 def _propose_remote(cfg, audit, action, device_key, dev) -> dict:

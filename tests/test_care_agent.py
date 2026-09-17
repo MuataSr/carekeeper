@@ -76,6 +76,57 @@ def test_fix_backs_up_before_writing(tmp_cfg):
 
 
 # ---------------------------------------------------------------------------
+# smartctl note field (Issue #1): an unrun drive-health check is labelled
+# ---------------------------------------------------------------------------
+def test_smart_missing_tool_returns_note(monkeypatch):
+    monkeypatch.setattr(care_agent.shutil, "which", lambda x: None)
+    res = care_agent.telemetry_smart()
+    assert res["devices"] == []
+    assert "isn't installed" in res["note"]
+
+
+def test_smart_no_drives_returns_note(monkeypatch):
+    monkeypatch.setattr(care_agent.shutil, "which", lambda x: "/sbin/smartctl")
+    monkeypatch.setattr(care_agent, "_run", lambda cmd, timeout=20: ("", 0))
+    res = care_agent.telemetry_smart()
+    assert res["devices"] == []
+    assert "no drives" in res["note"]
+
+
+def test_smart_scan_error_returns_note(monkeypatch):
+    monkeypatch.setattr(care_agent.shutil, "which", lambda x: "/sbin/smartctl")
+    monkeypatch.setattr(care_agent, "_run", lambda cmd, timeout=20: ("error", 1))
+    res = care_agent.telemetry_smart()
+    assert res["devices"] == []
+    assert "couldn't run" in res["note"]
+
+
+# ---------------------------------------------------------------------------
+# apply-package-updates action (fix #3): registered + honest failure
+# ---------------------------------------------------------------------------
+def test_apply_package_updates_registered():
+    assert "apply-package-updates" in care_agent.ACTIONS
+    assert care_agent.ACTIONS["apply-package-updates"]["class"] == 1
+
+
+def test_execute_fix_failure_never_logged_as_success(tmp_cfg, monkeypatch):
+    audit = care_agent.get_audit(tmp_cfg["audit"]["db"])
+    p = care_agent.propose_fix(tmp_cfg, audit, "rotate-logs")
+
+    def fake_copy(cfg, mode):
+        if mode == "backup":
+            return {"backup": "x"}
+        return {"ok": False, "error": "the fix could not run here"}
+
+    monkeypatch.setattr(care_agent, "_copy_scratch_log", fake_copy)
+    res = care_agent.execute_fix(tmp_cfg, audit, "rotate-logs", p["token"])
+    assert "error" in res and "could not run" in res["error"]
+    rows = audit.recent(3)
+    assert rows[0]["allowed"] == 0
+    assert "approved fix executed" not in rows[0]["reason"]
+
+
+# ---------------------------------------------------------------------------
 # Audit trail (local twin - regression for the PRAGMA d[1] fix)
 # ---------------------------------------------------------------------------
 def test_audit_recent_has_named_keys(tmp_path):

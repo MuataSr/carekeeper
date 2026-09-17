@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -221,13 +222,22 @@ def telemetry_disk():
 
 
 def telemetry_smart():
-    """Drive health via smartctl -H -A. Read-only."""
+    """Drive health via smartctl -H -A. Read-only.
+
+    Issue #1: distinguish 'tool missing' / 'couldn't run' / 'no drives'
+    with a plain-language `note` so an unrun check is never mistaken for
+    a clean bill of health. The note is written gate-clean (no banned
+    words) so it can pass through the report unchanged.
+    """
+    if shutil.which("smartctl") is None:
+        return {"devices": [],
+                "note": "the drive health check tool isn't installed"}
     out, rc = _run(["smartctl", "--scan"])
     devices = []
     for line in out.splitlines():
         if line.startswith("/dev/"):
             dev = line.split()[0]
-            health, hrc = _run(["smartctl", "-H", dev], timeout=25)
+            health, _hrc = _run(["smartctl", "-H", dev], timeout=25)
             attrs, _ = _run(["smartctl", "-A", dev], timeout=25)
             status = "unknown"
             if "PASSED" in health or "OK" in health:
@@ -247,6 +257,12 @@ def telemetry_smart():
                         temp = int(cols[9])
             devices.append({"dev": dev, "health": status,
                             "reallocated_sectors": realloc, "temp_c": temp})
+    if not devices:
+        if rc != 0:
+            return {"devices": devices,
+                    "note": "the drive health check couldn't run"}
+        return {"devices": devices,
+                "note": "the drive health tool found no drives to check"}
     return {"devices": devices}
 
 
@@ -337,7 +353,12 @@ ACTIONS = {
         "backup": lambda cfg: _copy_scratch_log(cfg, "backup"),
         "exec": lambda cfg: _copy_scratch_log(cfg, "rotate"),
     },
-    # v1.5+: "apply-package-updates", "restart-service", "rotate-system-logs"
+    "apply-package-updates": {
+        "class": 1,
+        "desc": "install the waiting security updates",
+        "backup": lambda cfg: _apt_snapshot(cfg),
+        "exec": lambda cfg: _apt_upgrade(cfg),
+    },
 }
 
 
@@ -361,6 +382,33 @@ def _copy_scratch_log(cfg, mode):
     with open(src, "w") as f:
         f.write("")
     return {"rotated_to": dest}
+
+
+def _apt_snapshot(cfg):
+    """Record the pending-update list before installing (read-only)."""
+    out, _rc = _run(["apt-get", "-s", "upgrade"], timeout=60)
+    dest = os.path.join(cfg["backup_dir"], f"apt-list.{int(time.time())}.txt")
+    with open(dest, "w") as f:
+        f.write(out)
+    return {"backup": dest}
+
+
+def _apt_upgrade(cfg):
+    """Install pending updates. Needs passwordless sudo; returns an honest
+    failure (never fabricates success) on machines that can't run it."""
+    out, rc = _run(["sudo", "-n", "apt-get", "upgrade", "-y"], timeout=900)
+    if rc != 0:
+        return {"ok": False,
+                "error": "updates couldn't be installed - this computer "
+                         "needs admin approval to finish"}
+    upgraded = 0
+    for line in out.splitlines():
+        if " upgraded," in line or " newly installed," in line:
+            try:
+                upgraded = max(upgraded, int(line.split()[0]))
+            except (ValueError, IndexError):
+                pass
+    return {"ok": True, "upgraded": upgraded}
 
 
 class ApprovalStore:
@@ -450,6 +498,11 @@ def execute_fix(cfg, audit, action_name, token):
               True, "backup taken before write", {"backup": before})
     # 2) execute
     after = action["exec"](cfg)
+    if isinstance(after, dict) and after.get("ok") is False:
+        audit.log(cfg["device_id"], "tool", f"fix.{action_name}", "write",
+                  False, f"fix failed: {after.get('error', 'unknown error')}",
+                  {"token_hint": token[:8]})
+        return {"error": after.get("error", "the fix failed")}
     # 3) audit the write itself
     audit.log(cfg["device_id"], "tool", f"fix.{action_name}", "write",
               True, "approved fix executed", {"after": after,

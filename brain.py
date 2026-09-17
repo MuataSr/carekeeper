@@ -319,10 +319,14 @@ def plain_bullets(machines: dict) -> list:
                 facts.append("backup folder is older than expected")
             else:
                 facts.append("backup folder looks fresh")
-        smart = tele.get("smart", {}).get("devices", [])
-        if not smart:
+        smart = tele.get("smart", {})
+        note = smart.get("note")
+        smart_devices = smart.get("devices", [])
+        if note and not smart_devices:
+            facts.append(note)
+        elif not smart_devices:
             facts.append("drive health couldn't be checked")
-        elif any(s.get("health") == "FAIL" for s in smart):
+        elif any(s.get("health") == "FAIL" for s in smart_devices):
             facts.append("drive health needs attention")
         else:
             facts.append("drives look healthy")
@@ -464,14 +468,15 @@ def week_bullets(stats: dict) -> list:
 
 
 def weekly_report(cfg, machines: dict, stats: dict,
-                  trends: list = None) -> tuple:
+                  trends: list = None, dark: list = None) -> tuple:
     """Week-in-review report. Same gate discipline as fleet_report:
     code prepares the facts, brain composes, dictionary verifies,
     retry once, else guaranteed-clean template."""
     wb = week_bullets(stats)
     tb = trends or []
+    db = dark or []
     bullets = plain_bullets(machines)
-    facts = "\n".join(f"- {b}" for b in wb + tb + bullets)
+    facts = "\n".join(f"- {b}" for b in db + wb + tb + bullets)
     persona = get_persona(cfg)
 
     def _ask(extra_rule: str = None):
@@ -502,6 +507,7 @@ def weekly_report(cfg, machines: dict, stats: dict,
 
     def _template():
         lines = [persona["opening"]]
+        lines += [f"- {b}" for b in db]
         lines += [f"- {b}" for b in wb]
         lines += [f"- {b}" for b in tb]
         lines += [f"- {b}" for b in bullets]

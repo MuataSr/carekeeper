@@ -88,6 +88,20 @@ def test_smart_unknown_is_honest(make_tele):
     assert "drive health couldn't be checked" in line
 
 
+def test_smart_note_used_in_bullets(make_tele):
+    tele = make_tele(smart={"devices": [],
+                            "note": "the drive health check tool isn't installed"})
+    line = brain.plain_bullets({"hub": tele})[0]
+    assert "isn't installed" in line
+
+
+def test_smart_note_is_gate_clean():
+    for note in ("the drive health check tool isn't installed",
+                 "the drive health check couldn't run",
+                 "the drive health tool found no drives to check"):
+        assert brain.check_dictionary(note) == [], note
+
+
 def test_smart_fail_flagged(make_tele):
     tele = make_tele(smart={"devices": [{"dev": "/dev/sda", "health": "FAIL"}]})
     line = brain.plain_bullets({"hub": tele})[0]
