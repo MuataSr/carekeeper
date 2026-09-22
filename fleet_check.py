@@ -22,7 +22,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
 from care_agent import load_config, get_audit
-from brain import fleet_report, weekly_report
+from brain import fleet_report, weekly_report, FRIENDLY_NAMES
 from manny_bot import TelegramBot
 
 REGISTRY = os.path.join(BASE, "state", "devices.json")
@@ -77,20 +77,39 @@ def collect_local(cfg) -> dict:
         return {"error": f"bad telemetry: {exc}"}
 
 
+def reach_hosts(dev: dict) -> list:
+    """Candidate SSH hosts for a device, in priority order.
+
+    Primary is the WireGuard host; a same-LAN fallback (`lan_host`) lets
+    the fleet keep monitoring a device whose tunnel is down. Deduped.
+    """
+    reach = dev.get("reach", {})
+    hosts = []
+    for key in ("ssh_host", "lan_host"):
+        h = reach.get(key)
+        if h and h not in hosts:
+            hosts.append(h)
+    return hosts
+
+
 def collect_remote(dev: dict) -> dict:
     reach = dev.get("reach", {})
-    host = reach.get("ssh_host") or dev.get("host")
     path = reach.get("path", "~/carekeeper/care_agent.py")
     user = reach.get("user", "")
-    target = f"{user}@{host}" if user else host
-    out, rc = _run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                    target, f"python3 {path} --check"], timeout=90)
-    if rc != 0:
-        return {"error": (out or "ssh failed")[-200:]}
-    try:
-        return extract_json(out)
-    except ValueError as exc:
-        return {"error": f"bad telemetry: {exc}"}
+    last_err = {"error": "ssh failed"}
+    for host in reach_hosts(dev):
+        target = f"{user}@{host}" if user else host
+        out, rc = _run(["ssh", "-o", "BatchMode=yes", "-o",
+                        "ConnectTimeout=10", target,
+                        f"python3 {path} --check"], timeout=90)
+        if rc != 0:
+            last_err = {"error": (out or "ssh failed")[-200:]}
+            continue
+        try:
+            return extract_json(out)
+        except ValueError as exc:
+            return {"error": f"bad telemetry: {exc}"}
+    return last_err
 
 
 def collect_all(cfg) -> dict:
@@ -147,6 +166,152 @@ def week_audit_stats(cfg) -> dict:
     return stats
 
 
+def _snapshot_telemetry(cfg, machines: dict):
+    """Persist one row per device for trend history (hub audit DB).
+
+    Called on every fleet check (daily + weekly). The snapshots table is
+    a plain history store - NOT part of the hash chain. Pruned at 90 days.
+    A snapshot failure must never fail the fleet check itself.
+    """
+    db = cfg["audit"]["db"]
+    try:
+        conn = sqlite3.connect(db)
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS telemetry_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts REAL NOT NULL,
+                device TEXT NOT NULL,
+                disk_worst_pct REAL,
+                patches_pending INTEGER,
+                backup_ok INTEGER,
+                smart_ok INTEGER,
+                reachable INTEGER)""")
+        now = time.time()
+        for dev, tele in machines.items():
+            if isinstance(tele, dict) and "error" in tele:
+                conn.execute(
+                    "INSERT INTO telemetry_snapshots (ts, device, reachable) "
+                    "VALUES (?,?,0)", (now, dev))
+                continue
+            disk = tele.get("disk", {}).get("worst_pct")
+            patches = tele.get("patches", {}).get("pending")
+            bres = tele.get("backups", {}).get("results", [])
+            if bres and all(b.get("present") and not b.get("empty")
+                            and not b.get("stale") for b in bres):
+                backup_ok = 1
+            elif bres:
+                backup_ok = 0
+            else:
+                backup_ok = None  # no backup configured - unknown, not 'ok'
+            smart = tele.get("smart", {}).get("devices", [])
+            if smart and any(s.get("health") == "FAIL" for s in smart):
+                smart_ok = 0
+            elif smart:
+                smart_ok = 1
+            else:
+                smart_ok = None  # couldn't check - unknown, not 'ok'
+            conn.execute(
+                "INSERT INTO telemetry_snapshots (ts, device, disk_worst_pct, "
+                "patches_pending, backup_ok, smart_ok, reachable) "
+                "VALUES (?,?,?,?,?,?,1)",
+                (now, dev, disk, patches, backup_ok, smart_ok))
+        conn.execute("DELETE FROM telemetry_snapshots WHERE ts < ?",
+                     (now - 90 * 86400,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # history is best-effort; the report still ships
+
+
+def trend_summary(cfg, window_days: int = 14) -> list:
+    """Deterministic plain-language trend facts from stored snapshots.
+
+    Honesty rules: needs >= 3 reachable snapshots per device (fewer =
+    say nothing - never fabricate a trend); storage trend only when the
+    move is >= 3 percentage points ('grown'/'dropped'), otherwise 'held
+    steady'; unreachable days are reported as exactly that. Output is
+    clean by construction (passes the dictionary gate).
+    """
+    db = cfg["audit"]["db"]
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT device, ts, disk_worst_pct, patches_pending, backup_ok, "
+            "smart_ok, reachable FROM telemetry_snapshots WHERE ts >= ? "
+            "ORDER BY device, ts", (time.time() - window_days * 86400,)
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return []  # no history yet - honest silence
+    per = {}
+    for dev, ts, disk, _patches, _bak, _smart, reach in rows:
+        per.setdefault(dev, []).append((ts, disk, reach))
+    lines = []
+    for dev, pts in sorted(per.items()):
+        name = FRIENDLY_NAMES.get(dev, dev)
+        reachable = [p for p in pts if p[2] == 1]
+        if len(reachable) < 3:
+            continue  # not enough history - do not fabricate
+        disks = [(ts, d) for ts, d, _r in reachable if d is not None]
+        if len(disks) >= 3:
+            first_pct, last_pct = disks[0][1], disks[-1][1]
+            delta = last_pct - first_pct
+            def _pct(v):
+                return f"{v:g}"  # 61.0 -> "61", 61.5 -> "61.5"
+            if abs(delta) >= 3:
+                direction = "grown" if delta > 0 else "dropped"
+                lines.append(
+                    f"{name}'s storage has {direction} from {_pct(first_pct)}% "
+                    f"full to {_pct(last_pct)}% full over the last "
+                    f"{window_days} days.")
+            else:
+                lines.append(
+                    f"{name}'s storage has held steady around "
+                    f"{_pct(last_pct)}% full.")
+        unreachable = len(pts) - len(reachable)
+        if unreachable and len(pts) >= 3:
+            lines.append(
+                f"{name} couldn't be reached {unreachable} of the "
+                f"last {len(pts)} checks.")
+    return lines
+
+
+def dark_device_summary(cfg, threshold: int = 3) -> list:
+    """Devices unreachable for a run of consecutive checks.
+
+    Honesty rules: counts only the most recent consecutive-miss run and
+    reports it once the run reaches `threshold` checks. A device that has
+    simply been off for a stretch reads as exactly that. Output is
+    gate-clean by construction (passes the dictionary gate).
+    """
+    db = cfg["audit"]["db"]
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT device, reachable FROM telemetry_snapshots "
+            "ORDER BY device, ts").fetchall()
+        conn.close()
+    except Exception:
+        return []
+    per = {}
+    for dev, reach in rows:
+        per.setdefault(dev, []).append(reach)
+    lines = []
+    for dev, seq in per.items():
+        n = 0
+        for r in reversed(seq):
+            if r == 0:
+                n += 1
+            else:
+                break
+        if n >= threshold:
+            name = FRIENDLY_NAMES.get(dev, dev)
+            lines.append(f"{name} couldn't be reached for the last {n} "
+                         f"checks in a row - it may be turned off or off "
+                         f"the network.")
+    return lines
+
+
 def main():
     ap = argparse.ArgumentParser(description="CareKeeper fleet check")
     ap.add_argument("--once", action="store_true",
@@ -168,6 +333,9 @@ def main():
 
     machines = collect_all(cfg)
 
+    # persist today's telemetry for trend history (both paths)
+    _snapshot_telemetry(cfg, machines)
+
     # audit each device check
     for name, tele in machines.items():
         if isinstance(tele, dict) and "error" in tele:
@@ -182,7 +350,9 @@ def main():
     # brain report (gate-checked internally: retry once, then clean template)
     if args.weekly:
         stats = week_audit_stats(cfg)
-        report, violations = weekly_report(cfg, machines, stats)
+        trends = trend_summary(cfg)
+        dark = dark_device_summary(cfg)
+        report, violations = weekly_report(cfg, machines, stats, trends, dark)
     else:
         report, violations = fleet_report(cfg, machines)
     print(report)

@@ -23,13 +23,23 @@ python3 fleet_check.py --weekly --no-send # week-in-review from the audit trail
 
 The brain is a local llama-server (see `config.yaml` → `brain.url`); if it's not running, the report falls back to the template and says so — that's the honest path, not a failure.
 
+## Running the tests
+
+The suite pins the trust contract — dictionary gate, honesty rules, consent flow, audit chain — so regressions fail loudly instead of shipping.
+
+```bash
+python3 -m pytest -q      # needs: pip install pytest pillow pyyaml
+```
+
+Key files: `tests/test_brain_gate.py` (gate + honesty + weekly counts), `tests/test_care_agent.py` (tokens + audit chain), `tests/test_dashboard.py` (unrun checks never read "up to date"), `tests/test_fleet_check.py` (snapshots + trends), `tests/test_manny_bot.py` (remote-fix routing). CI runs the same command on every push.
+
 ## What makes a good PR
 
 - **Small and verifiable.** One behavior per PR, with the verification command in the description.
-- **Plain language preserved.** Customer-facing output never contains: partition, patch, reboot, malware, virus, daemon, package, RAM, CPU, GPU, SSD, uptime, SMART, temperature, file paths, or misleading "X% left/available" framing. If you touch `brain.py`, run the dictionary tests.
+- **Plain language preserved.** Customer-facing output never contains: partition, patch, reboot, malware, virus, daemon, package, RAM, CPU, GPU, SSD, uptime, SMART, temperature, file paths, or misleading "X% left/available" framing. If you touch `brain.py`, the dictionary tests must stay green.
 - **No silent state.** If your change can fail (network, device unreachable, brain offline), it must fail honestly — report it, don't paper over it.
 - **Secrets stay out.** `state/`, `enroll/`, `audit/`, `backups/`, and live `config.yaml` are gitignored. Never commit tokens, keys, or runtime state.
-- **Tests are welcome, not required** — but a runnable `--no-send` verification line is required.
+- **Tests pass.** `python3 -m pytest -q` must be green. If you change a locked rule, add a test that pins the new behavior.
 
 ## Good first issues
 

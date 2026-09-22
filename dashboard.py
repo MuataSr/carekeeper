@@ -103,15 +103,15 @@ def status_of(tele: dict) -> tuple:
     if pending and pending > 0:
         n = "update" if pending == 1 else "updates"
         return f"{pending} {n} ready — waiting on your OK", AMBER
-    if not smart and smart_data.get("note") == "smartctl not installed":
-        return "drive health tool isn't installed", GRAY
-    if not smart and smart_data.get("note") == "no SMART-capable drives":
-        return "no compatible drives for the health check", GRAY
+    if not smart and smart_data.get("note"):
+        return smart_data["note"], GRAY
     # unrun checks: honesty over reassurance
     if disk is None:
         return "storage couldn't be checked", GRAY
     if pending is None:
         return "update check couldn't run", GRAY
+    if not smart:
+        return "drive health couldn't be checked", GRAY
     if bres:
         return "up to date · backed up", GREEN
     return "up to date", GREEN
@@ -144,15 +144,15 @@ def row_text(tele: dict) -> tuple:
     if pending and pending > 0:
         n = "update" if pending == 1 else "updates"
         return f"{pending} {n} ready — waiting on your OK", AMBER
-    if not smart and smart_data.get("note") == "smartctl not installed":
-        return "drive health tool isn't installed", GRAY
-    if not smart and smart_data.get("note") == "no SMART-capable drives":
-        return "no compatible drives for the health check", GRAY
+    if not smart and smart_data.get("note"):
+        return smart_data["note"], GRAY
     # unrun checks: honesty over reassurance
     if disk is None:
         return "storage couldn't be checked", GRAY
     if pending is None:
         return "update check couldn't run", GRAY
+    if not smart:
+        return "drive health couldn't be checked", GRAY
     if bres:
         return "up to date · backed up", CREAM_DIM
     return "up to date", CREAM_DIM
