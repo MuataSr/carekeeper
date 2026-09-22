@@ -33,10 +33,6 @@ class SmartPresentationTests(unittest.TestCase):
         self.assertIn("tool isn't installed", bullet)
         self.assertEqual(brain.check_dictionary(bullet), [])
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 @pytest.mark.parametrize("render", [dashboard.status_of, dashboard.row_text])
 @pytest.mark.parametrize("note", [
     "the drive health check tool isn't installed",
@@ -60,3 +56,16 @@ def test_dashboard_problems_outrank_unavailable_drive_check(make_tele, render):
     label, color = render(tele)
     assert "1 update ready" in label
     assert color == dashboard.AMBER
+
+
+@pytest.mark.parametrize("note", [
+    "the drive health check tool isn't installed",
+    "the drive health check couldn't run",
+    "the drive health tool found no drives to check",
+    None,
+])
+def test_template_explains_unavailable_drive_check(make_tele, note):
+    tele = make_tele(smart={"devices": [], "note": note})
+    report = brain._template_report(tele)
+    assert (note or "Drive health couldn't be checked.") in report
+    assert brain.check_dictionary(report) == []

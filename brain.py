@@ -182,12 +182,8 @@ def _template_report(tele, persona: dict = None) -> str:
                            "couldn't run.")
         else:
             lines.append("Drive health checks passed - the drives are in good shape.")
-    elif smart_data.get("note") == "smartctl not installed":
-        lines.append(
-            "The drive health check couldn't run because the tool it needs isn't installed."
-        )
-    elif smart_data.get("note") == "no SMART-capable drives":
-        lines.append("The drive health check couldn't run because no compatible drives were found.")
+    else:
+        lines.append(smart_data.get("note") or "Drive health couldn't be checked.")
     backups = tele["backups"]["results"]
     if backups:
         stale = [b for b in backups if b.get("stale")]
