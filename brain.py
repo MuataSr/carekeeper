@@ -166,7 +166,8 @@ def _template_report(tele, persona: dict = None) -> str:
             lines.append(f"Your main storage is {worst}% full. Worth keeping an eye on.")
         else:
             lines.append(f"Your main storage is {worst}% full - looking healthy.")
-    smart = tele["smart"]["devices"]
+    smart_data = tele["smart"]
+    smart = smart_data["devices"]
     if smart:
         bad = [s for s in smart if s["health"] == "FAIL"]
         unknown = [s for s in smart if s["health"] == "unknown"]
@@ -181,6 +182,8 @@ def _template_report(tele, persona: dict = None) -> str:
                            "couldn't run.")
         else:
             lines.append("Drive health checks passed - the drives are in good shape.")
+    else:
+        lines.append(smart_data.get("note") or "Drive health couldn't be checked.")
     backups = tele["backups"]["results"]
     if backups:
         stale = [b for b in backups if b.get("stale")]
